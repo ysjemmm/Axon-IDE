@@ -1,0 +1,10 @@
+
+> axon-ide@0.1.0 build D:\projects\Axon\apps\vscode-extension
+> node esbuild.mjs
+
+
+  dist\extension.js      2.1mb
+  dist\extension.js.map  4.6mb
+
+Done in 218ms
+[esbuild] build done

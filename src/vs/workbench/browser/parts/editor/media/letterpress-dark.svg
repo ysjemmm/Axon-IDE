@@ -1,0 +1,46 @@
+<svg width="280" height="100" viewBox="0 0 280 100" fill="none" opacity="0.4" xmlns="http://www.w3.org/2000/svg">
+  <!-- 神经元标 -->
+  <g>
+    <path d="M60 42 L84 24" stroke="url(#axon-r)" stroke-width="4" stroke-linecap="round"/>
+    <path d="M64 50 L90 50" stroke="url(#axon-r)" stroke-width="4" stroke-linecap="round"/>
+    <path d="M60 58 L84 76" stroke="url(#axon-r)" stroke-width="4" stroke-linecap="round"/>
+    <path d="M40 42 L16 24" stroke="url(#axon-l)" stroke-width="4" stroke-linecap="round"/>
+    <path d="M36 50 L10 50" stroke="url(#axon-l)" stroke-width="4" stroke-linecap="round"/>
+    <path d="M40 58 L16 76" stroke="url(#axon-l)" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="84" cy="24" r="5" fill="#38bdf8"/>
+    <circle cx="90" cy="50" r="4.5" fill="#38bdf8"/>
+    <circle cx="84" cy="76" r="5" fill="#38bdf8"/>
+    <circle cx="16" cy="24" r="5" fill="#a78bfa"/>
+    <circle cx="10" cy="50" r="4.5" fill="#a78bfa"/>
+    <circle cx="16" cy="76" r="5" fill="#a78bfa"/>
+    <circle cx="50" cy="50" r="15" fill="url(#axon-core-glow)"/>
+    <circle cx="50" cy="50" r="8" fill="url(#axon-core)"/>
+  </g>
+  <!-- 文字标 -->
+  <text x="116" y="70" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="58" font-weight="700" letter-spacing="1" fill="url(#axon-word)">Axon</text>
+  <defs>
+    <radialGradient id="axon-core-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#818cf8"/>
+      <stop offset="70%" stop-color="#6366f1" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="axon-core" cx="40%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#a5b4fc"/>
+      <stop offset="50%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </radialGradient>
+    <linearGradient id="axon-r" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+    <linearGradient id="axon-l" x1="100%" y1="0%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="axon-word" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#818cf8"/>
+      <stop offset="55%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#c4b5fd"/>
+    </linearGradient>
+  </defs>
+</svg>

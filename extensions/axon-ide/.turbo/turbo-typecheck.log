@@ -1,0 +1,4 @@
+
+> axon-ide@0.1.0 typecheck D:\projects\Axon\apps\vscode-extension
+> tsc -p tsconfig.json --noEmit
+

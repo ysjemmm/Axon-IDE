@@ -1,0 +1,36 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M74 50 L100 24" stroke="url(#axs-r)" stroke-width="5" stroke-linecap="round"/>
+  <path d="M79 64 L108 64" stroke="url(#axs-r)" stroke-width="5" stroke-linecap="round"/>
+  <path d="M74 78 L100 104" stroke="url(#axs-r)" stroke-width="5" stroke-linecap="round"/>
+  <path d="M54 50 L28 24" stroke="url(#axs-l)" stroke-width="5" stroke-linecap="round"/>
+  <path d="M49 64 L20 64" stroke="url(#axs-l)" stroke-width="5" stroke-linecap="round"/>
+  <path d="M54 78 L28 104" stroke="url(#axs-l)" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="100" cy="24" r="6.5" fill="#38bdf8"/>
+  <circle cx="108" cy="64" r="6" fill="#38bdf8"/>
+  <circle cx="100" cy="104" r="6.5" fill="#38bdf8"/>
+  <circle cx="28" cy="24" r="6.5" fill="#a78bfa"/>
+  <circle cx="20" cy="64" r="6" fill="#a78bfa"/>
+  <circle cx="28" cy="104" r="6.5" fill="#a78bfa"/>
+  <circle cx="64" cy="64" r="20" fill="url(#axs-glow)"/>
+  <circle cx="64" cy="64" r="11" fill="url(#axs-core)"/>
+  <defs>
+    <radialGradient id="axs-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="70%" stop-color="#4f46e5" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#4f46e5" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="axs-core" cx="40%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="50%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </radialGradient>
+    <linearGradient id="axs-r" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+    <linearGradient id="axs-l" x1="100%" y1="0%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+  </defs>
+</svg>

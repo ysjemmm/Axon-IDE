@@ -1,0 +1,44 @@
+<svg id="axon-logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <circle cx="256" cy="256" r="256" fill="#0f172a"/>
+  <circle cx="256" cy="256" r="56" fill="url(#axon-core-glow)"/>
+  <circle cx="256" cy="256" r="32" fill="url(#axon-core-inner)"/>
+  <path d="M296 216 L350 162 L388 138" stroke="url(#axon-branch-r)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="388" cy="138" r="14" fill="#38bdf8"/>
+  <path d="M312 256 L374 252 L412 236" stroke="url(#axon-branch-r)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="412" cy="236" r="12" fill="#38bdf8" opacity="0.85"/>
+  <path d="M296 296 L348 348 L380 380" stroke="url(#axon-branch-r)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="380" cy="380" r="14" fill="#38bdf8"/>
+  <path d="M216 216 L162 162 L128 136" stroke="url(#axon-branch-l)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="128" cy="136" r="13" fill="#a78bfa"/>
+  <path d="M200 256 L138 260 L100 276" stroke="url(#axon-branch-l)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="100" cy="276" r="12" fill="#a78bfa" opacity="0.85"/>
+  <path d="M216 296 L164 348 L134 376" stroke="url(#axon-branch-l)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="134" cy="376" r="13" fill="#a78bfa"/>
+  <path d="M256 200 L260 140 L272 100" stroke="url(#axon-branch-r)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="272" cy="100" r="11" fill="#38bdf8" opacity="0.8"/>
+  <path d="M256 312 L252 372 L240 412" stroke="url(#axon-branch-l)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="240" cy="412" r="11" fill="#a78bfa" opacity="0.8"/>
+  <circle cx="330" cy="182" r="6" fill="#ffffff" opacity="0.9"/>
+  <circle cx="162" cy="162" r="5.5" fill="#ffffff" opacity="0.8"/>
+  <circle cx="330" cy="348" r="5" fill="#ffffff" opacity="0.75"/>
+  <defs>
+    <radialGradient id="axon-core-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="70%" stop-color="#4f46e5" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#4f46e5" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="axon-core-inner" cx="40%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="50%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </radialGradient>
+    <linearGradient id="axon-branch-r" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+    <linearGradient id="axon-branch-l" x1="100%" y1="0%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+  </defs>
+</svg>

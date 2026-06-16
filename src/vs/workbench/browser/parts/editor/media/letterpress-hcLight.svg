@@ -1,0 +1,17 @@
+<svg width="280" height="100" viewBox="0 0 280 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M60 42 L84 24" stroke="#6B6B6B" stroke-width="4" stroke-linecap="round"/>
+  <path d="M64 50 L90 50" stroke="#6B6B6B" stroke-width="4" stroke-linecap="round"/>
+  <path d="M60 58 L84 76" stroke="#6B6B6B" stroke-width="4" stroke-linecap="round"/>
+  <path d="M40 42 L16 24" stroke="#6B6B6B" stroke-width="4" stroke-linecap="round"/>
+  <path d="M36 50 L10 50" stroke="#6B6B6B" stroke-width="4" stroke-linecap="round"/>
+  <path d="M40 58 L16 76" stroke="#6B6B6B" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="84" cy="24" r="5" fill="#6B6B6B"/>
+  <circle cx="90" cy="50" r="4.5" fill="#6B6B6B"/>
+  <circle cx="84" cy="76" r="5" fill="#6B6B6B"/>
+  <circle cx="16" cy="24" r="5" fill="#6B6B6B"/>
+  <circle cx="10" cy="50" r="4.5" fill="#6B6B6B"/>
+  <circle cx="16" cy="76" r="5" fill="#6B6B6B"/>
+  <circle cx="50" cy="50" r="15" fill="none" stroke="#6B6B6B" stroke-width="4"/>
+  <circle cx="50" cy="50" r="6" fill="#6B6B6B"/>
+  <text x="116" y="70" font-family="'Segoe UI', system-ui, -apple-system, sans-serif" font-size="58" font-weight="700" letter-spacing="1" fill="#6B6B6B">Axon</text>
+</svg>

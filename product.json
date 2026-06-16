@@ -1,0 +1,109 @@
+{
+	"nameShort": "Axon IDE",
+	"nameLong": "Axon IDE",
+	"applicationName": "axon-ide",
+	"dataFolderName": ".axon-ide",
+	"sharedDataFolderName": ".axon-ide-shared",
+	"win32MutexName": "axonide",
+	"licenseName": "MIT",
+	"licenseUrl": "https://github.com/microsoft/vscode/blob/main/LICENSE.txt",
+	"serverLicenseUrl": "https://github.com/microsoft/vscode/blob/main/LICENSE.txt",
+	"serverGreeting": [],
+	"serverLicense": [],
+	"serverLicensePrompt": "",
+	"serverApplicationName": "axon-ide-server",
+	"serverDataFolderName": ".axon-ide-server",
+	"tunnelApplicationName": "axon-ide-tunnel",
+	"win32DirName": "Axon IDE",
+	"win32NameVersion": "Axon IDE",
+	"win32RegValueName": "AxonIDE",
+	"win32x64AppId": "{{D77B7E06-80BA-4137-BCF4-654B95CCEBC5}",
+	"win32arm64AppId": "{{D1ACE434-89C5-48D1-88D3-E2991DF85475}",
+	"win32x64UserAppId": "{{CC6B787D-37A0-49E8-AE24-8559A032BE0C}",
+	"win32arm64UserAppId": "{{3AEBF0C8-F733-4AD4-BADE-FDB816D53D7B}",
+	"win32AppUserModelId": "Axon.AxonIDE",
+	"win32ShellNameShort": "A&xon IDE",
+	"win32TunnelServiceMutex": "axonide-tunnelservice",
+	"win32TunnelMutex": "axonide-tunnel",
+	"darwinBundleIdentifier": "com.axon.ide",
+	"darwinProfileUUID": "47827DD9-4734-49A0-AF80-7E19B11495CC",
+	"darwinProfilePayloadUUID": "CF808BE7-53F3-46C6-A7E2-7EDB98A5E959",
+	"linuxIconName": "axon-ide",
+	"licenseFileName": "LICENSE.txt",
+	"reportIssueUrl": "",
+	"nodejsRepository": "https://nodejs.org",
+	"urlProtocol": "axon-ide",
+	"builtInExtensions": [],
+	"builtInExtensionsEnabledWithAutoUpdates": [],
+		"configurationDefaults": {
+		"chat.titleBar.signIn.enabled": false,
+		"chat.titleBar.openInAgentsWindow.enabled": false,
+		"chat.commandCenter.enabled": false,
+		"explorer.compactFolders": false,
+		"git.mergeEditor": true
+	},
+	"onboardingKeymaps": [
+		{
+			"id": "vscode",
+			"label": "VS Code",
+			"description": "Default keyboard mapping"
+		},
+		{
+			"id": "sublime",
+			"label": "Sublime Text",
+			"extensionId": "ms-vscode.sublime-keybindings",
+			"description": "Keyboard mapping from Sublime Text"
+		},
+		{
+			"id": "intellij",
+			"label": "IntelliJ / JetBrains",
+			"extensionId": "k--kato.intellij-idea-keybindings",
+			"description": "Keyboard mapping from IntelliJ IDEA"
+		},
+		{
+			"id": "vim",
+			"label": "Vim",
+			"extensionId": "vscodevim.vim",
+			"description": "Vim modal editing"
+		}
+	],
+	"onboardingThemes": [
+		{
+			"id": "dark-2026",
+			"label": "Dark 2026",
+			"themeId": "Dark 2026",
+			"type": "dark"
+		},
+		{
+			"id": "hc-dark",
+			"label": "Dark High Contrast",
+			"themeId": "Default High Contrast",
+			"type": "hcDark"
+		},
+		{
+			"id": "solarized-dark",
+			"label": "Solarized Dark",
+			"themeId": "Solarized Dark",
+			"type": "dark"
+		},
+		{
+			"id": "light-2026",
+			"label": "Light 2026",
+			"themeId": "Light 2026",
+			"type": "light"
+		},
+		{
+			"id": "hc-light",
+			"label": "Light High Contrast",
+			"themeId": "Default High Contrast Light",
+			"type": "hcLight"
+		},
+		{
+			"id": "solarized-light",
+			"label": "Solarized Light",
+			"themeId": "Solarized Light",
+			"type": "light"
+		}
+	],
+	"sessionsWindowAllowedExtensions": []
+}

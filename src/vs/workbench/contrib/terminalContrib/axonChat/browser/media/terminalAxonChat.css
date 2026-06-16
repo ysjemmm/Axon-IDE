@@ -1,0 +1,24 @@
+/*---------------------------------------------------------------------------------------------
+ *  Axon 终端选区「添加到对话」浮动按钮样式
+ *--------------------------------------------------------------------------------------------*/
+
+.terminal-axon-add-btn {
+	position: absolute;
+	z-index: 100;
+	padding: 3px 10px;
+	font-size: 12px;
+	line-height: 18px;
+	color: var(--vscode-button-foreground);
+	background-color: var(--vscode-button-background);
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 4px;
+	cursor: pointer;
+	user-select: none;
+	white-space: nowrap;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+	pointer-events: auto;
+}
+
+.terminal-axon-add-btn:hover {
+	background-color: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+}
