@@ -54,7 +54,7 @@ export class InlineCompletionLanguageStatusBarContribution extends Disposable im
 		});
 
 		this._register(autorunWithStore((reader, store) => {
-			// Do not show the Copilot icon in the language status when AI features are disabled
+			// Do not show the Axon icon in the language status when AI features are disabled
 			const sentiment = this._sentiment.read(reader);
 			if (sentiment.hidden) {
 				return;
@@ -69,19 +69,19 @@ export class InlineCompletionLanguageStatusBarContribution extends Disposable im
 
 			const statusMap: Record<typeof status, { shortLabel: string; label: string; loading: boolean }> = {
 				loading: { shortLabel: '', label: localize('inlineSuggestionLoading', "Loading..."), loading: true, },
-				ghostText: { shortLabel: '$(lightbulb)', label: '$(copilot) ' + localize('inlineCompletionAvailable', "Inline completion available"), loading: false, },
-				inlineEdit: { shortLabel: '$(lightbulb-sparkle)', label: '$(copilot) ' + localize('inlineEditAvailable', "Inline edit available"), loading: false, },
-				noSuggestion: { shortLabel: '$(circle-slash)', label: '$(copilot) ' + localize('noInlineSuggestionAvailable', "No inline suggestion available"), loading: false, },
+				ghostText: { shortLabel: '$(lightbulb)', label: '$(axon) ' + localize('inlineCompletionAvailable', "Inline completion available"), loading: false, },
+				inlineEdit: { shortLabel: '$(lightbulb-sparkle)', label: '$(axon) ' + localize('inlineEditAvailable', "Inline edit available"), loading: false, },
+				noSuggestion: { shortLabel: '$(circle-slash)', label: '$(axon) ' + localize('noInlineSuggestionAvailable', "No inline suggestion available"), loading: false, },
 			};
 
 			store.add(this._languageStatusService.addStatus({
 				accessibilityInfo: undefined,
 				busy: statusMap[status].loading,
 				command: undefined,
-				detail: localize('inlineSuggestionsSmall', "Inline suggestions"),
+				detail: localize('inlineSuggestionsSmall', "Axon"),
 				id: 'inlineSuggestions',
 				label: { value: statusMap[status].label, shortValue: statusMap[status].shortLabel },
-				name: localize('inlineSuggestions', "Inline Suggestions"),
+				name: localize('inlineSuggestions', "Axon Inline Completions"),
 				selector: { pattern: state.model.textModel.uri.fsPath },
 				severity: Severity.Info,
 				source: 'inlineSuggestions',
