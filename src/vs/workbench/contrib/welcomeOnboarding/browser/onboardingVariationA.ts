@@ -10,7 +10,6 @@ import { isCancellationError } from '../../../../base/common/errors.js';
 import { StopWatch } from '../../../../base/common/stopwatch.js';
 import { URI } from '../../../../base/common/uri.js';
 import { isWindows, isMacintosh, isLinux } from '../../../../base/common/platform.js';
-import { assertDefined } from '../../../../base/common/types.js';
 import { FileAccess } from '../../../../base/common/network.js';
 import { ILayoutService } from '../../../../platform/layout/browser/layoutService.js';
 import { KeyCode } from '../../../../base/common/keyCodes.js';
@@ -77,9 +76,11 @@ type OnboardingActionEvent = {
 
 type EnterpriseSignInUiState = 'options' | 'instance' | 'progress';
 
-assertDefined(product.defaultChatAgent, 'Onboarding requires a default chat agent product configuration.');
-const defaultChat = product.defaultChatAgent;
-
+// Axon: `defaultChatAgent` is optional in product.json (no bundled Copilot agent).
+// The previous hard `assertDefined` crashed module load on builds without it. Fall
+// back to an empty stub so the contribution can load; the Copilot/GitHub sign-in step
+// that reads these fields is not reached when no chat agent is configured.
+const defaultChat = product.defaultChatAgent ?? ({} as typeof product.defaultChatAgent);
 /**
  * Variation A — Classic Wizard Modal
  *

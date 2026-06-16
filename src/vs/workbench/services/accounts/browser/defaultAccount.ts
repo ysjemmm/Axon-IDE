@@ -143,7 +143,9 @@ export class DefaultAccountService extends Disposable implements IDefaultAccount
 		@IProductService productService: IProductService,
 	) {
 		super();
-		this.defaultAccountConfig = toDefaultAccountConfig(productService.defaultChatAgent);
+		this.defaultAccountConfig = productService.defaultChatAgent
+			? toDefaultAccountConfig(productService.defaultChatAgent)
+			: undefined!;
 	}
 
 	async getDefaultAccount(): Promise<IDefaultAccount | null> {
@@ -1125,6 +1127,12 @@ class DefaultAccountProviderContribution extends Disposable implements IWorkbenc
 		@IDefaultAccountService defaultAccountService: IDefaultAccountService,
 	) {
 		super();
+		// Axon: when no default chat agent is configured in product.json there is
+		// no Copilot-style account to manage, so skip provider setup entirely.
+		// Downstream consumers already tolerate a missing provider (via `?.`).
+		if (!productService.defaultChatAgent) {
+			return;
+		}
 		const defaultAccountProvider = this._register(instantiationService.createInstance(DefaultAccountProvider, toDefaultAccountConfig(productService.defaultChatAgent)));
 		defaultAccountService.setDefaultAccountProvider(defaultAccountProvider);
 	}

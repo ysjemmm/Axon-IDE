@@ -287,6 +287,9 @@ import './contrib/debug/browser/debugViewlet.js';
 // Markers
 import './contrib/markers/browser/markers.contribution.js';
 
+// Proactive Awareness (AI-assisted terminal error & diagnostics detection)
+import './contrib/proactiveAwareness/browser/proactiveAwareness.contribution.js';
+
 // Process Explorer
 import './contrib/processExplorer/browser/processExplorer.contribution.js';
 

@@ -314,7 +314,7 @@ export function activate(context: vscode.ExtensionContext): void {
         // 同步 hub 的 deps.workspaces（让后续 load_session 也能读到最新列表）
         (hub as any).deps.workspaces = workspaces;
         // 通过 dispatch set_workspace 更新当前内存 session 的工作区列表
-        hub.dispatch({ type: "set_workspace", workspace: workspaces[0], workspaces } as any).catch(() => {});
+        hub.dispatch({ type: "set_workspace", workspace: workspaces[0], workspaces } as any).catch(() => { });
         // 同步通知 webview 更新工作区信息
         provider.postToWebview({ type: "workspace_set", workspace: workspaces[0], workspaces });
       }
@@ -343,6 +343,19 @@ export function activate(context: vscode.ExtensionContext): void {
         source: "terminal",
         label: `${terminalName} · ${lineCount} 行`,
         text: payload.text,
+      });
+    }),
+    // 主动感知问题 → 添加到 Axon 对话（由状态栏主动感知指示器触发）
+    vscode.commands.registerCommand("axon.addProactiveAwarenessToChat", async (payload?: { summary?: string; details?: string }) => {
+      const summary = payload?.summary?.trim() || "检测到一些问题";
+      const details = payload?.details?.trim() || "";
+      await vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");
+      await vscode.commands.executeCommand("axon.chat.focus");
+      provider.postToWebview({
+        type: "add_context",
+        source: "terminal",
+        label: summary,
+        text: details ? `${summary}\n\n${details}\n\n请帮我分析并解决这些问题。` : `${summary}\n\n请帮我分析并解决这些问题。`,
       });
     }),
     // 编辑器代码选区 → 添加到 Axon 对话（由 workbench 编辑器浮动按钮触发）
