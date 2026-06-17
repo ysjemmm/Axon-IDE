@@ -39,7 +39,6 @@ jobs:
         with:
           node-version-file: .nvmrc
 
-      # Windows 需要 MSBuild 编译原生模块
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
@@ -48,14 +47,25 @@ jobs:
         with:
           python-version: '3.11'
 
+      # npm ci 严格按 lock 文件安装（预发布版 @typescript/native-preview 不会跑偏），
+      # --ignore-scripts 跳过 postinstall 避免 npm_command=ci 传播到子目录。
       - name: Install dependencies
-        run: npm install
+        run: npm ci --ignore-scripts
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # 手动跑 postinstall，注入 npm_command=install 避免对无 lock 文件的子目录跑 npm ci。
+      - name: Install extension dependencies
+        run: node build/npm/postinstall.ts
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          npm_command: install
+
       - name: Build & Package
         run: npm run gulp vscode-win32-x64
+        shell: bash
 
       - name: Create zip archive
         shell: pwsh
@@ -92,9 +102,15 @@ jobs:
           node-version-file: .nvmrc
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci --ignore-scripts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install extension dependencies
+        run: node build/npm/postinstall.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          npm_command: install
 
       - name: Build & Package
         run: npm run gulp vscode-darwin-arm64
@@ -133,9 +149,15 @@ jobs:
           node-version-file: .nvmrc
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci --ignore-scripts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install extension dependencies
+        run: node build/npm/postinstall.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          npm_command: install
 
       - name: Build & Package
         run: npm run gulp vscode-darwin-x64
