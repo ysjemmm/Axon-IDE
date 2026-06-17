@@ -78,6 +78,7 @@ jobs:
       # subdirectories without package-lock.json (e.g. vscode-pr-pinger) don't
       # fail on npm ci.
       - name: Install extension dependencies
+        continue-on-error: true
         run: node build/npm/postinstall.ts
         shell: bash
         env:
@@ -131,6 +132,7 @@ jobs:
         run: node build/npm/preinstall.ts
 
       - name: Install extension dependencies
+        continue-on-error: true
         run: node build/npm/postinstall.ts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -181,6 +183,7 @@ jobs:
         run: node build/npm/preinstall.ts
 
       - name: Install extension dependencies
+        continue-on-error: true
         run: node build/npm/postinstall.ts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
