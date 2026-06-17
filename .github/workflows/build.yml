@@ -47,24 +47,16 @@ jobs:
         with:
           python-version: '3.11'
 
-      # Step 1: install all deps from lock file, skip lifecycle scripts.
-      # Skipping preinstall avoids the VS compiler check (which would fail
-      # because the runner's VS 2022 path isn't what preinstall.ts expects).
       - name: Install dependencies
         run: npm ci --ignore-scripts
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # @typescript/native-preview ships a platform-native tsgo binary that
-      # gets downloaded during its postinstall script. Since we skipped all
-      # lifecycle scripts, rebuild just this one package to get tsgo back.
       - name: Install tsgo native binary
         run: npm rebuild @typescript/native-preview
         shell: bash
 
-      # Step 2: locate Visual Studio 2022 via vswhere (the runner may have any
-      # edition: Enterprise / Professional / Community / BuildTools).
       - name: Locate Visual Studio
         shell: pwsh
         run: |
@@ -73,17 +65,12 @@ jobs:
           Write-Host "VS Path: $vsPath"
           echo "VS2022_INSTALL=$vsPath" >> $env:GITHUB_ENV
 
-      # Step 3: run preinstall manually with the located VS path.
-      # This installs Electron headers needed for native module compilation.
       - name: Setup native build environment
         run: node build/npm/preinstall.ts
         shell: bash
         env:
           vs2022_install: ${{ env.VS2022_INSTALL }}
 
-      # Step 4: run postinstall manually with npm_command=install so extension
-      # subdirectories without package-lock.json (e.g. vscode-pr-pinger) don't
-      # fail on npm ci.
       - name: Install extension dependencies
         continue-on-error: true
         run: node build/npm/postinstall.ts
@@ -96,19 +83,35 @@ jobs:
         run: npm run gulp vscode-win32-x64
         shell: bash
 
-      - name: Create zip archive
+      # ── 便携版 zip ──
+      - name: Create portable zip
         shell: pwsh
         run: |
           $src = Join-Path (Split-Path $PWD -Parent) "VSCode-win32-x64"
-          $dst = "$PWD\.build\Axon-IDE-win32-x64.zip"
+          $dst = "$PWD\.build\Axon-IDE-win32-x64-portable.zip"
           Compress-Archive -Path "$src\*" -DestinationPath $dst
-          Write-Host "Archive: $dst ($((Get-Item $dst).Length) bytes)"
+          Write-Host "Portable zip: $dst ($((Get-Item $dst).Length) bytes)"
 
-      - name: Upload artifact
+      # ── 安装版 .exe（Inno Setup）─
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Create installer
+        shell: pwsh
+        run: |
+          $appDir = Join-Path (Split-Path $PWD -Parent) "VSCode-win32-x64"
+          $outDir = "$PWD\.build"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppDir="$appDir" /DOutputDir="$outDir" build\win32\axon-ide.iss
+          Write-Host "Installer: $outDir\Axon-IDE-win32-x64-setup.exe ($((Get-Item "$outDir\Axon-IDE-win32-x64-setup.exe").Length) bytes)"
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v5
         with:
           name: Axon-IDE-win32-x64
-          path: .build/Axon-IDE-win32-x64.zip
+          path: |
+            .build/Axon-IDE-win32-x64-portable.zip
+            .build/Axon-IDE-win32-x64-setup.exe
           retention-days: 7
 
   # =========================================================================
@@ -151,18 +154,34 @@ jobs:
       - name: Build & Package
         run: npm run gulp vscode-darwin-arm64
 
-      - name: Create zip archive
+      - name: Create portable zip
         run: |
           src=$(dirname "$PWD")/VSCode-darwin-arm64
-          dst="$PWD/.build/Axon-IDE-darwin-arm64.zip"
+          dst="$PWD/.build/Axon-IDE-darwin-arm64-portable.zip"
           cd "$src" && zip -r "$dst" .
-          echo "Archive: $dst ($(stat -f%z "$dst") bytes)"
+          echo "Portable zip: $dst ($(stat -f%z "$dst") bytes)"
 
-      - name: Upload artifact
+      - name: Create DMG installer
+        run: |
+          src=$(dirname "$PWD")/VSCode-darwin-arm64
+          app="$src/Axon IDE.app"
+          dmg="$PWD/.build/Axon-IDE-darwin-arm64.dmg"
+          rm -f "$dmg"
+          # 创建一个临时 DMG 文件夹放 .app + Applications 快捷方式
+          tmp="$(mktemp -d)"
+          cp -R "$app" "$tmp/"
+          ln -s /Applications "$tmp/Applications"
+          hdiutil create -volname "Axon IDE" -srcfolder "$tmp" -ov -format UDZO "$dmg"
+          rm -rf "$tmp"
+          echo "DMG: $dmg ($(stat -f%z "$dmg") bytes)"
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v5
         with:
           name: Axon-IDE-darwin-arm64
-          path: .build/Axon-IDE-darwin-arm64.zip
+          path: |
+            .build/Axon-IDE-darwin-arm64-portable.zip
+            .build/Axon-IDE-darwin-arm64.dmg
           retention-days: 7
 
   # =========================================================================
@@ -205,16 +224,31 @@ jobs:
       - name: Build & Package
         run: npm run gulp vscode-darwin-x64
 
-      - name: Create zip archive
+      - name: Create portable zip
         run: |
           src=$(dirname "$PWD")/VSCode-darwin-x64
-          dst="$PWD/.build/Axon-IDE-darwin-x64.zip"
+          dst="$PWD/.build/Axon-IDE-darwin-x64-portable.zip"
           cd "$src" && zip -r "$dst" .
-          echo "Archive: $dst ($(stat -f%z "$dst") bytes)"
+          echo "Portable zip: $dst ($(stat -f%z "$dst") bytes)"
 
-      - name: Upload artifact
+      - name: Create DMG installer
+        run: |
+          src=$(dirname "$PWD")/VSCode-darwin-x64
+          app="$src/Axon IDE.app"
+          dmg="$PWD/.build/Axon-IDE-darwin-x64.dmg"
+          rm -f "$dmg"
+          tmp="$(mktemp -d)"
+          cp -R "$app" "$tmp/"
+          ln -s /Applications "$tmp/Applications"
+          hdiutil create -volname "Axon IDE" -srcfolder "$tmp" -ov -format UDZO "$dmg"
+          rm -rf "$tmp"
+          echo "DMG: $dmg ($(stat -f%z "$dmg") bytes)"
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v5
         with:
           name: Axon-IDE-darwin-x64
-          path: .build/Axon-IDE-darwin-x64.zip
+          path: |
+            .build/Axon-IDE-darwin-x64-portable.zip
+            .build/Axon-IDE-darwin-x64.dmg
           retention-days: 7
