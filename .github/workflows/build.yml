@@ -47,15 +47,26 @@ jobs:
         with:
           python-version: '3.11'
 
-      # npm ci 严格按 lock 文件安装（预发布版 @typescript/native-preview 不会跑偏），
-      # --ignore-scripts 跳过 postinstall 避免 npm_command=ci 传播到子目录。
+      # Step 1: install all deps from lock file, skip lifecycle scripts.
+      # Skipping preinstall avoids the VS compiler check (which would fail
+      # because the runner's VS 2022 path isn't what preinstall.ts expects).
       - name: Install dependencies
         run: npm ci --ignore-scripts
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 手动跑 postinstall，注入 npm_command=install 避免对无 lock 文件的子目录跑 npm ci。
+      # Step 2: run preinstall manually, telling it where VS 2022 lives.
+      # This installs Electron headers needed for native module compilation.
+      - name: Setup native build environment
+        run: node build/npm/preinstall.ts
+        shell: bash
+        env:
+          vs2022_install: 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise'
+
+      # Step 3: run postinstall manually with npm_command=install so extension
+      # subdirectories without package-lock.json (e.g. vscode-pr-pinger) don't
+      # fail on npm ci.
       - name: Install extension dependencies
         run: node build/npm/postinstall.ts
         shell: bash
@@ -106,6 +117,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Setup native build environment
+        run: node build/npm/preinstall.ts
+
       - name: Install extension dependencies
         run: node build/npm/postinstall.ts
         env:
@@ -152,6 +166,9 @@ jobs:
         run: npm ci --ignore-scripts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup native build environment
+        run: node build/npm/preinstall.ts
 
       - name: Install extension dependencies
         run: node build/npm/postinstall.ts
