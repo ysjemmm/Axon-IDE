@@ -1,0 +1,154 @@
+name: Build Axon IDE
+
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Build which platforms?'
+        type: choice
+        default: 'all'
+        options:
+          - all
+          - windows-only
+          - macos-only
+
+permissions:
+  contents: read
+
+env:
+  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+jobs:
+  # =========================================================================
+  # Windows x64
+  # =========================================================================
+  build-windows:
+    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'windows-only' }}
+    name: Windows x64
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      # Windows 需要 MSBuild 编译原生模块
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Package
+        run: npm run gulp vscode-win32-x64
+
+      - name: Create zip archive
+        shell: pwsh
+        run: |
+          $src = Join-Path (Split-Path $PWD -Parent) "VSCode-win32-x64"
+          $dst = "$PWD\.build\Axon-IDE-win32-x64.zip"
+          Compress-Archive -Path "$src\*" -DestinationPath $dst
+          Write-Host "Archive: $dst ($((Get-Item $dst).Length) bytes)"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: Axon-IDE-win32-x64
+          path: .build/Axon-IDE-win32-x64.zip
+          retention-days: 7
+
+  # =========================================================================
+  # macOS arm64 (Apple Silicon)
+  # =========================================================================
+  build-macos-arm64:
+    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'macos-only' }}
+    name: macOS arm64
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Package
+        run: npm run gulp vscode-darwin-arm64
+
+      - name: Create zip archive
+        run: |
+          src=$(dirname "$PWD")/VSCode-darwin-arm64
+          dst="$PWD/.build/Axon-IDE-darwin-arm64.zip"
+          cd "$src" && zip -r "$dst" .
+          echo "Archive: $dst ($(stat -f%z "$dst") bytes)"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: Axon-IDE-darwin-arm64
+          path: .build/Axon-IDE-darwin-arm64.zip
+          retention-days: 7
+
+  # =========================================================================
+  # macOS x64 (Intel)
+  # =========================================================================
+  build-macos-x64:
+    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'macos-only' }}
+    name: macOS x64
+    runs-on: macos-13
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Package
+        run: npm run gulp vscode-darwin-x64
+
+      - name: Create zip archive
+        run: |
+          src=$(dirname "$PWD")/VSCode-darwin-x64
+          dst="$PWD/.build/Axon-IDE-darwin-x64.zip"
+          cd "$src" && zip -r "$dst" .
+          echo "Archive: $dst ($(stat -f%z "$dst") bytes)"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: Axon-IDE-darwin-x64
+          path: .build/Axon-IDE-darwin-x64.zip
+          retention-days: 7

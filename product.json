@@ -30,7 +30,7 @@
 	"darwinProfilePayloadUUID": "CF808BE7-53F3-46C6-A7E2-7EDB98A5E959",
 	"linuxIconName": "axon-ide",
 	"licenseFileName": "LICENSE.txt",
-	"reportIssueUrl": "",
+	"reportIssueUrl": "https://github.com/ysjemmm/Axon-IDE/issues",
 	"nodejsRepository": "https://nodejs.org",
 	"urlProtocol": "axon-ide",
 	"builtInExtensions": [],
