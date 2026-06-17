@@ -7,9 +7,14 @@ import es from 'event-stream';
 import path from 'path';
 import fs from 'fs';
 import * as task from './lib/gulp/task.ts';
-import { checkCopilotEnginesVersion, hygiene } from './hygiene.ts';
+import { hygiene } from './hygiene.ts';
 
 const dirName = path.dirname(new URL(import.meta.url).pathname);
+
+/** Stub: upstream hygiene.ts no longer exports this; we don't ship Copilot. */
+function checkCopilotEnginesVersion(_repoRoot: string): string | null {
+  return null;
+}
 
 function checkPackageJSON(this: NodeJS.ReadWriteStream, actualPath: string) {
 	const actual = JSON.parse(fs.readFileSync(path.join(dirName, '..', actualPath), 'utf8'));
