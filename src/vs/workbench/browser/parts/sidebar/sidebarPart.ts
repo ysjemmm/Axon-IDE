@@ -178,14 +178,6 @@ export class SidebarPart extends AbstractPaneCompositePart {
 		container.style.outlineColor = this.getColor(SIDE_BAR_DRAG_AND_DROP_BACKGROUND) ?? '';
 	}
 
-	override layout(width: number, height: number, top: number, left: number): void {
-		if (!this.layoutService.isVisible(Parts.SIDEBAR_PART)) {
-			return;
-		}
-
-		super.layout(width, height, top, left);
-	}
-
 	/**
 	 * Axon: 资源管理器（Explorer）隐藏了侧栏顶部标题栏（见 paneCompositePart.css 中
 	 * `:has(.explorer-viewlet)` 规则）。但布局仍按固定标题高度（PartLayout.TITLE_HEIGHT）
