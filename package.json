@@ -185,6 +185,7 @@
     "@vscode/test-web": "^0.0.76",
     "@vscode/v8-heap-parser": "^0.1.0",
     "@vscode/vscode-perf": "^0.0.19",
+    "@vscode/vsce": "^3.6.2",
     "@webgpu/types": "^0.1.66",
     "ansi-colors": "^3.2.3",
     "asar": "^3.0.3",
