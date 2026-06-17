@@ -557,6 +557,16 @@ function patchWin32DependenciesTask(destinationFolderName: string) {
 	const cwd = path.join(path.dirname(root), destinationFolderName);
 
 	return async () => {
+		// CI runner 没有 signtool.exe（Windows SDK 签名工具），
+		// 跳过 DLL 版本元数据打补丁——sign 和 rcedit 都需要它。
+		// 缺了只是 .dll/.node 文件属性里缺少版本号，不影响运行。
+		try {
+			cp.execSync('where signtool.exe', { stdio: 'ignore' });
+		} catch {
+			console.log('[patchWin32Dependencies] signtool.exe not found — skipping DLL version patching');
+			return;
+		}
+
 		const versionedResourcesFolder = util.getVersionedResourcesFolder('win32', commit!);
 		const deps = (await Promise.all([
 			glob('**/*.node', { cwd, ignore: 'extensions/node_modules/@parcel/watcher/**' }),
