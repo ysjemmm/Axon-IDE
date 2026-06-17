@@ -601,9 +601,15 @@ function prepareCopilotRipgrepShimTask(platform: string, arch: string, destinati
 		const appBase = platform === 'darwin'
 			? path.join(outputDir, `${product.nameLong}.app`, 'Contents', 'Resources', 'app')
 			: path.join(outputDir, versionedResourcesFolder, 'resources', 'app');
-		const appNodeModulesDir = path.join(appBase, 'node_modules');
-
 		const builtInCopilotExtensionDir = path.join(appBase, 'extensions', 'copilot');
+
+		// Axon IDE 不打包 Copilot 扩展，跳过 ripgrep shim 以免构建失败
+		if (!fs.existsSync(builtInCopilotExtensionDir)) {
+			console.log(`[prepareBuiltInCopilotRipgrepShim] Skipping — copilot extension not present (Axon IDE does not ship Copilot)`);
+			return;
+		}
+
+		const appNodeModulesDir = path.join(appBase, 'node_modules');
 		prepareBuiltInCopilotRipgrepShim(platform, arch, builtInCopilotExtensionDir, appNodeModulesDir);
 	};
 }
