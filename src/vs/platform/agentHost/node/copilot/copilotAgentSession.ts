@@ -43,6 +43,7 @@ import { getEditFilePaths, getInvocationMessage, getPastTenseMessage, getPermiss
 import { FileEditTracker } from '../shared/fileEditTracker.js';
 import { mapSessionEvents } from './mapSessionEvents.js';
 import { buildPendingEditContentUri } from './pendingEditContentStore.js';
+import { PendingRequestRegistry } from '../../common/pendingRequestRegistry.js';
 
 /**
  * The full set of agent modes the Copilot SDK accepts. Wider than the
@@ -371,7 +372,7 @@ export class CopilotAgentSession extends Disposable {
 	/** Tool names that are client-provided, derived from snapshot. */
 	private readonly _clientToolNames: ReadonlySet<string>;
 	/** Deferred promises for pending client tool calls, keyed by toolCallId. */
-	private readonly _pendingClientToolCalls = new Map<string, DeferredPromise<ToolResultObject>>();
+	private readonly _pendingClientToolCalls = new PendingRequestRegistry<ToolResultObject>();
 	/** `pending-edit-content:` URIs written during permission requests, keyed
 	 *  by toolCallId. Cleaned up when the permission resolves or the session
 	 *  is disposed. */
@@ -712,14 +713,7 @@ export class CopilotAgentSession extends Disposable {
 			parameters: def.inputSchema ?? { type: 'object' as const, properties: {} },
 			handler: async (_args: Record<string, unknown>, { toolCallId }) => {
 				try {
-					let deferred = this._pendingClientToolCalls.get(toolCallId);
-					if (!deferred) {
-						deferred = new DeferredPromise<ToolResultObject>();
-						this._pendingClientToolCalls.set(toolCallId, deferred);
-					}
-					const result = await deferred.p;
-					this._pendingClientToolCalls.delete(toolCallId);
-					return result;
+					return await this._pendingClientToolCalls.register(toolCallId);
 				} catch (error) {
 					this._logService.error(error, `[Copilot:${this.sessionId}] Failed in client tool handler: tool=${def.name}, toolCallId=${toolCallId}`);
 					throw error;
@@ -733,12 +727,6 @@ export class CopilotAgentSession extends Disposable {
 	 * toolCallId was found and handled.
 	 */
 	handleClientToolCallComplete(toolCallId: string, result: ToolCallResult) {
-		let deferred = this._pendingClientToolCalls.get(toolCallId);
-		if (!deferred) {
-			deferred = new DeferredPromise<ToolResultObject>();
-			this._pendingClientToolCalls.set(toolCallId, deferred);
-		}
-
 		const textContent = result.content
 			?.filter(c => c.type === ToolResultContentType.Text)
 			.map(c => c.text)
@@ -749,13 +737,13 @@ export class CopilotAgentSession extends Disposable {
 			.map(c => ({ data: c.data, mimeType: c.contentType, type: (/^image(\/|$)/.test(c.contentType) ? 'image' : 'resource') as 'image' | 'resource' }));
 
 		if (result.success) {
-			deferred.complete({
+			return this._pendingClientToolCalls.respond(toolCallId, {
 				textResultForLlm: textContent,
 				resultType: 'success',
 				binaryResultsForLlm: binaryResults?.length ? binaryResults : undefined,
 			});
 		} else {
-			deferred.complete({
+			return this._pendingClientToolCalls.respond(toolCallId, {
 				textResultForLlm: textContent || result.error?.message || 'Tool call failed',
 				resultType: 'failure',
 				error: result.error?.message,
@@ -2341,10 +2329,7 @@ export class CopilotAgentSession extends Disposable {
 	}
 
 	private _cancelPendingClientToolCalls(): void {
-		for (const [, deferred] of this._pendingClientToolCalls) {
-			deferred.complete({ textResultForLlm: 'Tool call cancelled: session ended', resultType: 'failure', error: 'Session ended' });
-		}
-		this._pendingClientToolCalls.clear();
+		this._pendingClientToolCalls.denyAll({ textResultForLlm: 'Tool call cancelled: session ended', resultType: 'failure', error: 'Session ended' });
 	}
 }
 

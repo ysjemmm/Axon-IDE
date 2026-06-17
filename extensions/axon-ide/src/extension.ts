@@ -25,6 +25,8 @@ import { registerTreeViews } from "./treeViews.js";
 import { registerAxonStatusBar } from "./statusBar.js";
 import { openOrFocusPanel } from "./panelManager.js";
 import { registerGitBlameAnnotation } from "./gitBlameAnnotation.js";
+import { registerInlineCompletion } from "./inlineCompletion.js";
+import { registerAskAxonCodeAction } from "./codeActionProvider.js";
 
 /** 批量导入结果（单条） */
 interface ImportResult {
@@ -826,6 +828,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // 编辑器行号右键菜单：使用 Git 追溯注解（对标 IDEA Annotate）
   registerGitBlameAnnotation(context);
+
+  // 内联代码补全（替代已删除的 copilot 扩展的 InlineCompletionItemProvider）
+  registerInlineCompletion(context);
+
+  // Quick Fix → "Ask Axon"：让 AI 一键修复诊断问题
+  registerAskAxonCodeAction(context, provider);
 
   // 监听 Agent 事件：relay_updated / relay_deleted 时刷新左侧 Relay 树
   channel.onEmit(async (event: any) => {

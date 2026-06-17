@@ -4,7 +4,7 @@
   "description": "Axon AI 编程助手 —— 内置 Agent 内核，深度集成编辑器",
   "version": "0.1.0",
   "private": true,
-  "publisher": "axon",
+  "publisher": "ysj",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -47,6 +47,48 @@
           "default": true,
           "scope": "resource",
           "markdownDescription": "检测诊断（errors/warnings）数量增加时，在侧栏展示通知。仅在问题数增多时触发。"
+        },
+        "axon.inlineCompletion.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "启用 AI 内联代码补全（替代 Copilot）。开启后，输入代码时 Axon 会自动建议补全。"
+        },
+        "axon.inlineCompletion.provider": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "内联补全使用的 LLM Provider。留空则自动探测第一个已配置的 provider。"
+        },
+        "axon.inlineCompletion.model": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "内联补全使用的模型。留空使用 gpt-4o-mini。可选更快/更便宜的模型（如 deepseek-chat、glm-4-flash 等）。"
+        },
+        "axon.inlineCompletion.maxPrefixLines": {
+          "type": "number",
+          "default": 80,
+          "scope": "resource",
+          "markdownDescription": "补全时发送给 LLM 的光标前最大行数。减小可降低延迟。"
+        },
+        "axon.inlineCompletion.maxSuffixLines": {
+          "type": "number",
+          "default": 30,
+          "scope": "resource",
+          "markdownDescription": "补全时发送给 LLM 的光标后最大行数。"
+        },
+        "axon.inlineCompletion.maxTokens": {
+          "type": "number",
+          "default": 128,
+          "scope": "resource",
+          "markdownDescription": "LLM 每次补全返回的最大 token 数。"
+        },
+        "axon.inlineCompletion.temperature": {
+          "type": "number",
+          "default": 0.1,
+          "scope": "resource",
+          "markdownDescription": "补全模型的采样温度（0-2）。越低结果越确定，越高结果越多样。"
         }
       }
     },

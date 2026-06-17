@@ -2092,6 +2092,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			const existing = invocation.toolSpecificData?.kind === 'terminal'
 				? invocation.toolSpecificData as IChatTerminalToolInvocationData
 				: undefined;
+			const terminalInstance = this._terminalChatService.getToolSessionTerminalInstances().find(instance => this._terminalChatService.getToolSessionIdForInstance(instance) === sessionId);
 
 			// Resolve the terminalCommandId from the AHP command source
 			let terminalCommandId = existing?.terminalCommandId;
@@ -2108,6 +2109,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 				...existing,
 				kind: 'terminal',
 				commandLine: { original: toolInput },
+				cwd: terminalInstance?.cwd ? URI.from({ scheme: 'file', path: terminalInstance.cwd }).toJSON() : existing?.cwd,
 				language: 'shellscript',
 				terminalToolSessionId: sessionId,
 				terminalCommandUri: URI.parse(terminalUri),

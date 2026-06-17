@@ -45,6 +45,21 @@ export function parseAhpTerminalToolSessionId(id: string): { terminal: string; s
 	return undefined;
 }
 
+function getTerminalCwd(toolSessionId: string | undefined): URI | undefined {
+	if (!toolSessionId) {
+		return undefined;
+	}
+	const parsed = parseAhpTerminalToolSessionId(toolSessionId);
+	if (!parsed) {
+		return undefined;
+	}
+	try {
+		return URI.parse(parsed.terminal);
+	} catch {
+		return undefined;
+	}
+}
+
 /**
  * Extracts the task description from `_meta.subagentDescription`, which is
  * populated from the tool's arguments at `tool_start` time by the event
@@ -506,11 +521,13 @@ export function completedToolCallToSerialized(tc: ICompletedToolCall, subAgentIn
 
 	let toolSpecificData: IChatTerminalToolInvocationData | IChatSearchToolInvocationData | undefined;
 	if (isTerminal) {
+		const terminalToolSessionId = terminalContentUri ? makeAhpTerminalToolSessionId(terminalContentUri, sessionResource) : undefined;
 		toolSpecificData = {
 			kind: 'terminal',
 			commandLine: { original: getTerminalInput(tc) ?? '' },
 			language: getTerminalLanguage(tc),
-			terminalToolSessionId: terminalContentUri ? makeAhpTerminalToolSessionId(terminalContentUri, sessionResource) : undefined,
+			cwd: getTerminalCwd(terminalToolSessionId),
+			terminalToolSessionId,
 			terminalCommandUri: terminalContentUri ? URI.parse(terminalContentUri) : undefined,
 			terminalCommandOutput: getTerminalOutput(tc),
 			terminalCommandState: { exitCode: isSuccess ? 0 : 1 },
@@ -871,11 +888,13 @@ export function toolCallStateToInvocation(tc: ToolCallState, subAgentInvocationI
 		? getTerminalContentUri(tc.content)
 		: undefined;
 	if (terminalContentUri) {
+		const terminalToolSessionId = makeAhpTerminalToolSessionId(terminalContentUri, sessionResource);
 		invocation.toolSpecificData = {
 			kind: 'terminal',
 			commandLine: { original: getTerminalInput(tc) || '' },
 			language: getTerminalLanguage(tc),
-			terminalToolSessionId: makeAhpTerminalToolSessionId(terminalContentUri, sessionResource),
+			cwd: getTerminalCwd(terminalToolSessionId),
+			terminalToolSessionId,
 			terminalCommandUri: URI.parse(terminalContentUri),
 			terminalCommandOutput: getTerminalOutput(tc),
 		} satisfies IChatTerminalToolInvocationData;
@@ -1004,12 +1023,14 @@ export function finalizeToolInvocation(invocation: ChatToolInvocation, tc: ToolC
 
 	if (isTerminal && (isCompleted || isCancelled)) {
 		const existing = invocation.toolSpecificData as IChatTerminalToolInvocationData | undefined;
+		const terminalToolSessionId = terminalContentUri ? makeAhpTerminalToolSessionId(terminalContentUri, backendSession) : existing?.terminalToolSessionId;
 		invocation.presentation = undefined;
 		invocation.toolSpecificData = {
 			kind: 'terminal',
 			commandLine: existing?.commandLine || { original: getTerminalInput(tc) || '' },
 			language: getTerminalLanguage(tc),
-			terminalToolSessionId: terminalContentUri ? makeAhpTerminalToolSessionId(terminalContentUri, backendSession) : existing?.terminalToolSessionId,
+			cwd: existing?.cwd ?? getTerminalCwd(terminalToolSessionId),
+			terminalToolSessionId,
 			terminalCommandOutput: getTerminalOutput(tc),
 			terminalCommandState: { exitCode: isCompleted && tc.success ? 0 : 1 },
 			terminalCommandUri: terminalContentUri ? URI.parse(terminalContentUri) : existing?.terminalCommandUri,
