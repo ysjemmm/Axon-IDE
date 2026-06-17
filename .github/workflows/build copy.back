@@ -92,7 +92,7 @@ jobs:
           Compress-Archive -Path "$src\*" -DestinationPath $dst
           Write-Host "Portable zip: $dst ($((Get-Item $dst).Length) bytes)"
 
-      # ── 安装版 .exe（Inno Setup）──
+      # ── 安装版 .exe（Inno Setup）─
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --yes --no-progress
@@ -144,12 +144,6 @@ jobs:
       - name: Setup native build environment
         run: node build/npm/preinstall.ts
 
-      # ✅ 新增：针对 Electron 重新编译所有 native addons（arm64）
-      # ✅ 对 Electron ABI 重编译所有 native 模块（解决 "原生模块版本不匹配" 崩溃）
-      - name: Rebuild native addons for Electron (arm64)
-        run: |
-          npm exec @electron/rebuild -- --version $(node -p "require('./node_modules/electron/package.json').version") --arch arm64 --force
-
       - name: Install extension dependencies
         continue-on-error: true
         run: node build/npm/postinstall.ts
@@ -160,20 +154,10 @@ jobs:
       - name: Build & Package
         run: npm run gulp vscode-darwin-arm64
 
-      # ✅ 新增：ad-hoc 签名，避免 macOS "已损坏" 提示
-      - name: Ad-hoc sign (arm64)
-        run: |
-          APP="$(dirname "$PWD")/VSCode-darwin-arm64/Axon IDE.app"
-          echo "Signing: $APP"
-          codesign --force --deep --sign - "$APP"
-          echo "Verify:"
-          codesign --verify --verbose "$APP"
-
       - name: Create portable zip
         run: |
           src=$(dirname "$PWD")/VSCode-darwin-arm64
           dst="$PWD/.build/Axon-IDE-darwin-arm64-portable.zip"
-          mkdir -p "$PWD/.build"
           cd "$src" && zip -r "$dst" .
           echo "Portable zip: $dst ($(stat -f%z "$dst") bytes)"
 
@@ -183,6 +167,7 @@ jobs:
           app="$src/Axon IDE.app"
           dmg="$PWD/.build/Axon-IDE-darwin-arm64.dmg"
           rm -f "$dmg"
+          # 创建一个临时 DMG 文件夹放 .app + Applications 快捷方式
           tmp="$(mktemp -d)"
           cp -R "$app" "$tmp/"
           ln -s /Applications "$tmp/Applications"
@@ -229,12 +214,6 @@ jobs:
       - name: Setup native build environment
         run: node build/npm/preinstall.ts
 
-      # ✅ 新增：针对 Electron 重新编译所有 native addons（x64）
-      # ✅ 对 Electron ABI 重编译所有 native 模块（解决 "原生模块版本不匹配" 崩溃）
-      - name: Rebuild native addons for Electron (x64)
-        run: |
-          npm exec @electron/rebuild -- --version $(node -p "require('./node_modules/electron/package.json').version") --arch x64 --force
-
       - name: Install extension dependencies
         continue-on-error: true
         run: node build/npm/postinstall.ts
@@ -245,20 +224,10 @@ jobs:
       - name: Build & Package
         run: npm run gulp vscode-darwin-x64
 
-      # ✅ 新增：ad-hoc 签名，避免 macOS "已损坏" 提示
-      - name: Ad-hoc sign (x64)
-        run: |
-          APP="$(dirname "$PWD")/VSCode-darwin-x64/Axon IDE.app"
-          echo "Signing: $APP"
-          codesign --force --deep --sign - "$APP"
-          echo "Verify:"
-          codesign --verify --verbose "$APP"
-
       - name: Create portable zip
         run: |
           src=$(dirname "$PWD")/VSCode-darwin-x64
           dst="$PWD/.build/Axon-IDE-darwin-x64-portable.zip"
-          mkdir -p "$PWD/.build"
           cd "$src" && zip -r "$dst" .
           echo "Portable zip: $dst ($(stat -f%z "$dst") bytes)"
 

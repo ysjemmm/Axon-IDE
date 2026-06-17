@@ -39,7 +39,6 @@
     "watch-extensions": "npm run gulp watch-extensions watch-extension-media",
     "watch-extensionsd": "deemon npm run watch-extensions",
     "kill-watch-extensionsd": "deemon --kill npm run watch-extensions",
-
     "precommit": "node --experimental-strip-types build/hygiene.ts",
     "gulp": "node --experimental-strip-types --max-old-space-size=8192 ./node_modules/gulp/bin/gulp.js",
     "electron": "node build/lib/electron.ts",
@@ -78,7 +77,6 @@
     "perf": "node scripts/code-perf.js",
     "perf:chat": "node scripts/chat-simulation/test-chat-perf-regression.js",
     "perf:chat-leak": "node scripts/chat-simulation/test-chat-mem-leaks.js",
-
     "update-build-ts-version": "npm install -D typescript@next && npm install -D @typescript/native-preview && (cd build && npm run typecheck)",
     "install-local-component-explorer": "npm install ../vscode-packages/js-component-explorer/dist/vscode-component-explorer-0.1.0.tgz ../vscode-packages/js-component-explorer/dist/vscode-component-explorer-cli-0.1.0.tgz --no-save && cd build/rspack && npm install ../../../vscode-packages/js-component-explorer/dist/vscode-component-explorer-webpack-plugin-0.1.0.tgz --no-save && cd ../vite && npm install ../../../vscode-packages/js-component-explorer/dist/vscode-component-explorer-vite-plugin-0.1.0.tgz --no-save",
     "symlink-local-component-explorer": "npm install ../vscode-packages/js-component-explorer/packages/explorer ../vscode-packages/js-component-explorer/packages/cli --no-save && cd build/rspack && npm install ../../../vscode-packages/js-component-explorer/packages/webpack-plugin ../../../vscode-packages/js-component-explorer/packages/explorer --no-save && cd ../vite && npm install ../../../vscode-packages/js-component-explorer/packages/vite-plugin ../../../vscode-packages/js-component-explorer/packages/explorer --no-save",
@@ -148,6 +146,7 @@
   },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.128",
+    "@electron/rebuild": "^4.0.4",
     "@playwright/cli": "^0.1.9",
     "@playwright/test": "^1.56.1",
     "@stylistic/eslint-plugin-ts": "^2.8.0",
@@ -184,8 +183,8 @@
     "@vscode/test-electron": "^2.4.0",
     "@vscode/test-web": "^0.0.76",
     "@vscode/v8-heap-parser": "^0.1.0",
-    "@vscode/vscode-perf": "^0.0.19",
     "@vscode/vsce": "^3.6.2",
+    "@vscode/vscode-perf": "^0.0.19",
     "@webgpu/types": "^0.1.66",
     "ansi-colors": "^3.2.3",
     "asar": "^3.0.3",
