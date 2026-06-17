@@ -56,6 +56,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # @typescript/native-preview ships a platform-native tsgo binary that
+      # gets downloaded during its postinstall script. Since we skipped all
+      # lifecycle scripts, rebuild just this one package to get tsgo back.
+      - name: Install tsgo native binary
+        run: npm rebuild @typescript/native-preview
+        shell: bash
+
       # Step 2: locate Visual Studio 2022 via vswhere (the runner may have any
       # edition: Enterprise / Professional / Community / BuildTools).
       - name: Locate Visual Studio
@@ -128,6 +135,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install tsgo native binary
+        run: npm rebuild @typescript/native-preview
+
       - name: Setup native build environment
         run: node build/npm/preinstall.ts
 
@@ -178,6 +188,9 @@ jobs:
         run: npm ci --ignore-scripts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install tsgo native binary
+        run: npm rebuild @typescript/native-preview
 
       - name: Setup native build environment
         run: node build/npm/preinstall.ts
