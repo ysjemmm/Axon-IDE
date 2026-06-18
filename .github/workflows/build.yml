@@ -148,6 +148,10 @@ jobs:
           cd "$GITHUB_WORKSPACE/extensions/axon-ide"
           node esbuild.mjs
 
+          # Clean up symlinked @axon packages — they show as "extraneous"
+          # in the downstream gulp npm list check and would fail the build.
+          rm -rf "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon"
+
       - name: Verify Axon extension bundle
         shell: pwsh
         run: |
@@ -280,6 +284,10 @@ jobs:
           # Bundle extension entry point
           cd "$GITHUB_WORKSPACE/extensions/axon-ide"
           node esbuild.mjs
+
+          # Clean up symlinked @axon packages — they show as "extraneous"
+          # in the downstream gulp npm list check and would fail the build.
+          rm -rf "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon"
 
       - name: Verify Axon extension bundle
         run: |
