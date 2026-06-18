@@ -24,7 +24,10 @@ function log(dir: string, message: string) {
 function run(command: string, args: string[], opts: child_process.SpawnSyncOptions) {
 	log(opts.cwd as string || '.', '$ ' + command + ' ' + args.join(' '));
 
-	const result = child_process.spawnSync(command, args, opts);
+	const result = child_process.spawnSync(command, args, {
+		...opts,
+		shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
+	});
 
 	if (result.error) {
 		console.error(`ERR Failed to spawn process: ${result.error}`);
@@ -57,7 +60,7 @@ async function npmInstallAsync(dir: string, opts?: child_process.SpawnOptions): 
 		env: { ...process.env },
 		...(opts ?? {}),
 		cwd: path.join(root, dir),
-		shell: true,
+		shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
 	};
 
 	const command = process.env['npm_command'] || 'install';
@@ -67,7 +70,7 @@ async function npmInstallAsync(dir: string, opts?: child_process.SpawnOptions): 
 			env: finalOpts.env,
 			cwd: root,
 			stdio: 'inherit',
-			shell: true,
+			shell: true, // Docker commands on Linux, fine to use default shell
 		};
 		const userinfo = os.userInfo();
 		log(dir, `Installing dependencies inside container ${process.env['VSCODE_REMOTE_DEPENDENCIES_CONTAINER_NAME']}...`);
