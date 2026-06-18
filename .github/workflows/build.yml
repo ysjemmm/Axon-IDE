@@ -118,6 +118,7 @@ jobs:
           npm_command: install
 
       - name: Build Axon extension bundle
+        shell: bash
         run: |
           git clone --depth=1 --branch master \
             https://x-access-token:${{ secrets.AXON_REPO_TOKEN }}@github.com/ysjemmm/Axon.git /tmp/Axon
@@ -126,9 +127,10 @@ jobs:
           corepack enable
           pnpm install --no-frozen-lockfile
 
-          # ✅ 用 turbo 按依赖顺序构建所有 packages，确保每个包都产出 dist/ + .d.ts
-          # turbo 会处理好 core → host-node → host-vscode 的依赖顺序
-          pnpm turbo run build
+          # Sequential build — turbo's dependency graph sometimes races on CI
+          cd /tmp/Axon/packages/core && npx tsc -b && cd /tmp/Axon
+          cd /tmp/Axon/packages/host-node && npx tsc && cd /tmp/Axon
+          cd /tmp/Axon/packages/host-vscode && npx tsc && cd /tmp/Axon
 
           # ✅ 验证关键产物存在
           test -f /tmp/Axon/packages/core/dist/index.js       || (echo "core build missing" && exit 1)
@@ -261,9 +263,10 @@ jobs:
           corepack enable
           pnpm install --no-frozen-lockfile
 
-          # ✅ 用 turbo 按依赖顺序构建所有 packages，确保每个包都产出 dist/ + .d.ts
-          # turbo 会处理好 core → host-node → host-vscode 的依赖顺序
-          pnpm turbo run build
+          # Sequential build — turbo's dependency graph sometimes races on CI
+          cd /tmp/Axon/packages/core && npx tsc -b && cd /tmp/Axon
+          cd /tmp/Axon/packages/host-node && npx tsc && cd /tmp/Axon
+          cd /tmp/Axon/packages/host-vscode && npx tsc && cd /tmp/Axon
 
           # ✅ 验证关键产物存在
           test -f /tmp/Axon/packages/core/dist/index.js       || (echo "core build missing" && exit 1)
