@@ -133,6 +133,9 @@ jobs:
           cd /tmp/Axon/packages/host-node && npx tsc --outDir dist && cd /tmp/Axon
           cd /tmp/Axon/packages/host-vscode && npx tsc --outDir dist && cd /tmp/Axon
 
+          # Build web UI (React frontend for the chat panel)
+          cd /tmp/Axon/web && AXON_WEB_BASE="./" npx vite build && cd /tmp/Axon
+
           # ✅ 验证关键产物存在
           test -f /tmp/Axon/packages/core/dist/index.js       || (echo "core build missing" && exit 1)
           test -f /tmp/Axon/packages/core/dist/index.d.ts     || (echo "core types missing" && exit 1)
@@ -147,6 +150,10 @@ jobs:
           # Bundle extension entry point
           cd "$GITHUB_WORKSPACE/extensions/axon-ide"
           node esbuild.mjs
+
+          # Copy web UI build into extension media
+          mkdir -p "$GITHUB_WORKSPACE/extensions/axon-ide/media/web"
+          cp -R /tmp/Axon/web/dist/* "$GITHUB_WORKSPACE/extensions/axon-ide/media/web/"
 
           # Clean up symlinked @axon packages — they show as "extraneous"
           # in the downstream gulp npm list check and would fail the build.
@@ -279,6 +286,9 @@ jobs:
           cd /tmp/Axon/packages/host-node && npx tsc --outDir dist && cd /tmp/Axon
           cd /tmp/Axon/packages/host-vscode && npx tsc --outDir dist && cd /tmp/Axon
 
+          # Build web UI (React frontend for the chat panel)
+          cd /tmp/Axon/web && AXON_WEB_BASE="./" npx vite build && cd /tmp/Axon
+
           # ✅ 验证关键产物存在
           test -f /tmp/Axon/packages/core/dist/index.js       || (echo "core build missing" && exit 1)
           test -f /tmp/Axon/packages/core/dist/index.d.ts     || (echo "core types missing" && exit 1)
@@ -293,6 +303,10 @@ jobs:
           # Bundle extension entry point
           cd "$GITHUB_WORKSPACE/extensions/axon-ide"
           node esbuild.mjs
+
+          # Copy web UI build into extension media
+          mkdir -p "$GITHUB_WORKSPACE/extensions/axon-ide/media/web"
+          cp -R /tmp/Axon/web/dist/* "$GITHUB_WORKSPACE/extensions/axon-ide/media/web/"
 
           # Clean up symlinked @axon packages — they show as "extraneous"
           # in the downstream gulp npm list check and would fail the build.
