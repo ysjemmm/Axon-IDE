@@ -301,9 +301,12 @@ jobs:
         run: |
           NODE_VER=$(node -v | sed 's/^v//')
           cd node_modules/node-pty
+          # Node.js-targeted prebuilt downloads conpty.dll (Windows-only).
+          # macOS has no conpty — the fork-based PTY doesn't need it,
+          # so prebuild-install will warn and that's expected.
           npx --yes prebuild-install --runtime node --target "$NODE_VER" --arch arm64 2>/dev/null || \
           npx --yes prebuild-install --runtime napi --arch arm64 2>/dev/null || \
-          echo "WARNING: Could not download node-pty prebuild, will build from source"
+          echo "NOTE: node-pty prebuild unavailable for darwin-arm64 (expected — conpty is Windows-only, fork PTY needs no DLL)"
           cd "$GITHUB_WORKSPACE"
 
       - name: Rebuild native addons for Electron (arm64)
