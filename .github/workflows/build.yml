@@ -145,8 +145,8 @@ jobs:
           ln -sf /tmp/Axon/packages/host-node   "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/host-node"
 
           # Bundle extension entry point
-          cd "$GITHUB_WORKSPACE"
-          node extensions/axon-ide/esbuild.mjs
+          cd "$GITHUB_WORKSPACE/extensions/axon-ide"
+          node esbuild.mjs
 
       - name: Verify Axon extension bundle
         shell: pwsh
@@ -278,8 +278,8 @@ jobs:
           ln -sf /tmp/Axon/packages/host-node   "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/host-node"
 
           # Bundle extension entry point
-          cd "$GITHUB_WORKSPACE"
-          node extensions/axon-ide/esbuild.mjs
+          cd "$GITHUB_WORKSPACE/extensions/axon-ide"
+          node esbuild.mjs
 
       - name: Verify Axon extension bundle
         run: |
