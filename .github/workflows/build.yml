@@ -126,7 +126,10 @@ jobs:
           cd /tmp/Axon
           corepack enable
           pnpm install --no-frozen-lockfile
-          pnpm --filter @axon/core --filter @axon/host-vscode build
+          # @axon/core build (force declarations so host-vscode can resolve types)
+          cd /tmp/Axon/packages/core && npx tsc --declaration && cd /tmp/Axon
+          # @axon/host-vscode build (skipLibCheck — workspace type links may be incomplete in CI clone)
+          cd /tmp/Axon/packages/host-vscode && npx tsc --skipLibCheck && cd /tmp/Axon
           # Symlink built packages into extension's node_modules
           mkdir -p "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon"
           ln -sf /tmp/Axon/packages/core "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/core"
@@ -251,7 +254,10 @@ jobs:
           cd /tmp/Axon
           corepack enable
           pnpm install --no-frozen-lockfile
-          pnpm --filter @axon/core --filter @axon/host-vscode build
+          # @axon/core build (force declarations so host-vscode can resolve types)
+          cd /tmp/Axon/packages/core && npx tsc --declaration && cd /tmp/Axon
+          # @axon/host-vscode build (skipLibCheck — workspace type links may be incomplete in CI clone)
+          cd /tmp/Axon/packages/host-vscode && npx tsc --skipLibCheck && cd /tmp/Axon
           # Symlink built packages into extension's node_modules
           mkdir -p "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon"
           ln -sf /tmp/Axon/packages/core "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/core"
