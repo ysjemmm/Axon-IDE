@@ -11,9 +11,13 @@ on:
           - all
           - windows-only
           - macos-only
+      release_tag:
+        description: 'Release tag, leave empty to use build-${{ github.run_number }}'
+        required: false
+        default: ''
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
@@ -283,3 +287,46 @@ jobs:
             .build/Axon-IDE-darwin-x64-portable.zip
             .build/Axon-IDE-darwin-x64.dmg
           retention-days: 7
+
+  # =========================================================================
+  # Publish GitHub Release
+  # =========================================================================
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - build-windows
+      - build-macos-arm64
+      - build-macos-x64
+    if: ${{ always() && !cancelled() && !contains(needs.*.result, 'failure') }}
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: .release-artifacts
+
+      - name: Collect release assets
+        run: |
+          mkdir -p .release
+          find .release-artifacts -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.dmg' \) -print -exec cp {} .release/ \;
+          ls -lh .release
+
+      - name: Resolve release tag
+        id: release
+        run: |
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=build-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: Axon IDE ${{ steps.release.outputs.tag }}
+          draft: false
+          prerelease: true
+          files: .release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
