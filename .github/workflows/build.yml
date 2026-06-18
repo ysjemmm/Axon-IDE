@@ -12,7 +12,7 @@ on:
           - windows-only
           - macos-only
       release_tag:
-        description: 'Release tag, leave empty to use build-${{ github.run_number }}'
+        description: 'Release tag, leave empty to use an auto-generated build tag'
         required: false
         default: ''
 
