@@ -117,9 +117,31 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           npm_command: install
 
+      - name: Build Axon extension bundle
+        run: node extensions/axon-ide/esbuild.mjs
+        shell: bash
+
+      - name: Verify Axon extension bundle
+        shell: pwsh
+        run: |
+          if (!(Test-Path "extensions\axon-ide\dist\extension.js")) {
+            Write-Error "Missing extensions\axon-ide\dist\extension.js"
+            exit 1
+          }
+
       - name: Build & Package
         run: npm run gulp vscode-win32-x64
         shell: bash
+
+      - name: Verify packaged Axon extension
+        shell: pwsh
+        run: |
+          $appDir = Join-Path (Split-Path $PWD -Parent) "VSCode-win32-x64"
+          $extensionJs = Join-Path $appDir "resources\app\extensions\axon-ide\dist\extension.js"
+          if (!(Test-Path $extensionJs)) {
+            Write-Error "Packaged Axon extension is missing: $extensionJs"
+            exit 1
+          }
 
       # ── 便携版 zip ──
       - name: Create portable zip
@@ -206,8 +228,21 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           npm_command: install
 
+      - name: Build Axon extension bundle
+        run: node extensions/axon-ide/esbuild.mjs
+
+      - name: Verify Axon extension bundle
+        run: |
+          test -f extensions/axon-ide/dist/extension.js || (echo "Missing extensions/axon-ide/dist/extension.js" && exit 1)
+
       - name: Build & Package
         run: npm run gulp vscode-darwin-arm64
+
+      - name: Verify packaged Axon extension
+        run: |
+          app_dir="$(dirname "$PWD")/VSCode-darwin-arm64"
+          extension_js="$app_dir/resources/app/extensions/axon-ide/dist/extension.js"
+          test -f "$extension_js" || (echo "Packaged Axon extension is missing: $extension_js" && exit 1)
 
       # ✅ 新增：ad-hoc 签名，避免 macOS "已损坏" 提示
       - name: Ad-hoc sign (arm64)
