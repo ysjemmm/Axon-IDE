@@ -113,17 +113,19 @@ jobs:
         env:
           vs2022_install: ${{ env.VS2022_INSTALL }}
 
-      - name: Build node-pty from source (produces conpty.dll)
+      - name: Copy conpty DLLs into build/Release
         shell: bash
         run: |
-          # npm ci --ignore-scripts skips node-pty's prebuild-install,
-          # so build/Release is empty. node-gyp rebuild compiles ALL
-          # targets from C++ source, including conpty.dll (the conpty
-          # target in binding.gyp). @electron/rebuild below will then
-          # overwrite pty.node with the Electron ABI version, but we
-          # snapshot conpty.dll first and restore it after.
+          # npm ci --ignore-scripts skips postinstall which copies
+          # conpty.dll + OpenConsole.exe from third_party/conpty/ into
+          # build/Release/conpty/. Do it now before @electron/rebuild
+          # wipes build/Release, so we can snapshot and restore them.
           cd node_modules/node-pty
-          node-gyp rebuild
+          mkdir -p build/Release/conpty
+          CONPTY_VER=$(ls third_party/conpty | head -1)
+          cp third_party/conpty/$CONPTY_VER/win10-x64/conpty.dll build/Release/conpty/
+          cp third_party/conpty/$CONPTY_VER/win10-x64/OpenConsole.exe build/Release/conpty/ 2>/dev/null || true
+          echo "conpty.dll: $(ls -la build/Release/conpty/conpty.dll 2>/dev/null || echo MISSING)"
           cd "$GITHUB_WORKSPACE"
 
       - name: Rebuild native addons for Electron (x64)
