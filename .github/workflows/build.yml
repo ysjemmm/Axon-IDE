@@ -138,7 +138,10 @@ jobs:
           npm exec @electron/rebuild -- --version $(node -p "require('./node_modules/electron/package.json').version") --arch x64 --force
           cp -Rn /tmp/node-pty-snapshot/. node_modules/node-pty/build/Release/ 2>/dev/null || true
           echo "--- Rebuild verification ---"
-          test -f node_modules/node-pty/build/Release/pty.node && echo "OK: pty.node" || echo "MISSING: pty.node"
+          # Windows (conpty): node-pty binding.gyp builds 'conpty.node' (main addon)
+          # + 'conpty_console_list.node'. 'pty.node' is Unix-only (forkpty).
+          # conpty.dll is a prebuilt DLL from third_party/conpty, restored from snapshot.
+          test -f node_modules/node-pty/build/Release/conpty.node && echo "OK: conpty.node" || echo "MISSING: conpty.node"
           test -f node_modules/node-pty/build/Release/conpty/conpty.dll && echo "OK: conpty.dll" || echo "MISSING: conpty.dll"
           test -f node_modules/node-pty/build/Release/conpty_console_list.node && echo "OK: conpty_console_list.node" || echo "MISSING: conpty_console_list.node"
         shell: bash
