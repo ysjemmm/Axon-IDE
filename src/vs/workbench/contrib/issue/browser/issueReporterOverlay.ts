@@ -1393,7 +1393,7 @@ export class IssueReporterOverlay {
 				renderContent: (container) => {
 					const sysTable = append(container, $('table.review-diag-table'));
 					if (modelData.versionInfo) {
-						this.addDiagRow(sysTable, 'VS Code', modelData.versionInfo.vscodeVersion);
+						this.addDiagRow(sysTable, 'Axon IDE', modelData.versionInfo.vscodeVersion);
 						this.addDiagRow(sysTable, 'OS', modelData.versionInfo.os);
 					}
 					if (modelData.systemInfo) {
