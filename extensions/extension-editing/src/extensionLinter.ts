@@ -340,8 +340,11 @@ export class ExtensionLinter {
 					if (!this.parse5) {
 						this.parse5 = await import('parse5');
 					}
-					const parser = new this.parse5.SAXParser({ locationInfo: true });
-					parser.on('startTag', (name, attrs, _selfClosing, location) => {
+					// parse5 v7 removed SAXParser; at runtime parse5 v3 is used which has SAXParser.
+					// Use type assertion to satisfy tsgo which resolves root parse5 v7 types.
+					// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+					const parser = new ((this.parse5 as any).SAXParser)({ locationInfo: true });
+					parser.on('startTag', (name: string, attrs: { name: string; value: string }[], _selfClosing: boolean, location: { startOffset: number; endOffset: number }) => {
 						if (name === 'img') {
 							const src = attrs.find(a => a.name === 'src');
 							if (src && src.value && location) {
@@ -358,7 +361,7 @@ export class ExtensionLinter {
 							diagnostics.push(svgStart);
 						}
 					});
-					parser.on('endTag', (name, location) => {
+					parser.on('endTag', (name: string, location: { startOffset: number; endOffset: number }) => {
 						if (name === 'svg' && svgStart && location) {
 							const end = tnp.begin + location.endOffset;
 							svgStart.range = new Range(svgStart.range.start, document.positionAt(end));
