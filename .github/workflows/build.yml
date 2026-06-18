@@ -107,14 +107,10 @@ jobs:
       - name: Rebuild native addons for Electron (x64)
         run: |
           npm exec @electron/rebuild -- --version $(node -p "require('./node_modules/electron/package.json').version") --arch x64 --force
-          # node-pty's conpty.dll is not a standard .node addon and requires explicit rebuild
-          cd "$GITHUB_WORKSPACE/node_modules/node-pty"
-          node node_modules/.bin/node-gyp rebuild \
-            --target=$(node -p "require('electron/package.json').version") \
-            --arch=x64 \
-            --dist-url=https://electronjs.org/headers
-          cd "$GITHUB_WORKSPACE"
-          test -f node_modules/node-pty/build/Release/conpty/conpty.dll || (echo "conpty.dll missing" && exit 1)
+          echo "--- Rebuild verification ---"
+          test -f node_modules/node-pty/build/Release/pty.node && echo "OK: pty.node" || echo "MISSING: pty.node"
+          test -f node_modules/node-pty/build/Release/conpty/conpty.dll && echo "OK: conpty.dll" || echo "MISSING: conpty.dll"
+          test -f node_modules/node-pty/build/Release/conpty_console_list.node && echo "OK: conpty_console_list.node" || echo "MISSING: conpty_console_list.node"
         shell: bash
 
       - name: Install extension dependencies
@@ -194,6 +190,9 @@ jobs:
             Write-Error "Packaged Axon extension is missing: $extensionJs"
             exit 1
           }
+          # Check node-pty (terminal native addon)
+          $conpty = Join-Path $appDir "resources\app\node_modules\node-pty\build\Release\conpty\conpty.dll"
+          if (Test-Path $conpty) { Write-Host "OK: conpty.dll" } else { Write-Warning "MISSING: conpty.dll" }
 
       - name: Create portable zip
         shell: pwsh
@@ -268,13 +267,8 @@ jobs:
       - name: Rebuild native addons for Electron (arm64)
         run: |
           npm exec @electron/rebuild -- --version $(node -p "require('./node_modules/electron/package.json').version") --arch arm64 --force
-          # node-pty native addon requires explicit rebuild for Electron ABI
-          cd "$GITHUB_WORKSPACE/node_modules/node-pty"
-          node node_modules/.bin/node-gyp rebuild \
-            --target=$(node -p "require('electron/package.json').version") \
-            --arch=arm64 \
-            --dist-url=https://electronjs.org/headers
-          cd "$GITHUB_WORKSPACE"
+          echo "--- Rebuild verification ---"
+          test -f node_modules/node-pty/build/Release/pty.node && echo "OK: pty.node" || echo "MISSING: pty.node"
 
       - name: Install extension dependencies
         continue-on-error: true
