@@ -104,6 +104,11 @@ jobs:
         env:
           vs2022_install: ${{ env.VS2022_INSTALL }}
 
+      - name: Rebuild native addons for Electron (x64)
+        run: |
+          npm exec @electron/rebuild -- --version $(node -p "require('./node_modules/electron/package.json').version") --arch x64 --force
+        shell: bash
+
       - name: Install extension dependencies
         continue-on-error: true
         run: node build/npm/postinstall.ts
