@@ -118,8 +118,23 @@ jobs:
           npm_command: install
 
       - name: Build Axon extension bundle
-        run: node extensions/axon-ide/esbuild.mjs
         shell: bash
+        run: |
+          # Clone Axon monorepo (contains @axon/core + @axon/host-vscode + web UI)
+          git clone --depth=1 --branch master https://x-access-token:${{ secrets.AXON_REPO_TOKEN }}@github.com/ysjemmm/Axon.git /tmp/Axon
+          # Build the packages needed by the extension
+          cd /tmp/Axon
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm --filter @axon/core --filter @axon/host-vscode build
+          # Symlink built packages into extension's node_modules
+          mkdir -p "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon"
+          ln -sf /tmp/Axon/packages/core "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/core"
+          ln -sf /tmp/Axon/packages/host-vscode "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/host-vscode"
+          ln -sf /tmp/Axon/packages/host-node "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/host-node"
+          # Bundle extension entry point
+          cd "$GITHUB_WORKSPACE"
+          node extensions/axon-ide/esbuild.mjs
 
       - name: Verify Axon extension bundle
         shell: pwsh
@@ -229,7 +244,22 @@ jobs:
           npm_command: install
 
       - name: Build Axon extension bundle
-        run: node extensions/axon-ide/esbuild.mjs
+        run: |
+          # Clone Axon monorepo (contains @axon/core + @axon/host-vscode + web UI)
+          git clone --depth=1 --branch master https://x-access-token:${{ secrets.AXON_REPO_TOKEN }}@github.com/ysjemmm/Axon.git /tmp/Axon
+          # Build the packages needed by the extension
+          cd /tmp/Axon
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm --filter @axon/core --filter @axon/host-vscode build
+          # Symlink built packages into extension's node_modules
+          mkdir -p "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon"
+          ln -sf /tmp/Axon/packages/core "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/core"
+          ln -sf /tmp/Axon/packages/host-vscode "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/host-vscode"
+          ln -sf /tmp/Axon/packages/host-node "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/host-node"
+          # Bundle extension entry point
+          cd "$GITHUB_WORKSPACE"
+          node extensions/axon-ide/esbuild.mjs
 
       - name: Verify Axon extension bundle
         run: |
