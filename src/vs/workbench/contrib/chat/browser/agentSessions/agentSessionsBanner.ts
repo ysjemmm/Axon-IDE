@@ -37,6 +37,7 @@ export interface IAgentsBannerResult {
  * It is also hidden when AI features are disabled.
  */
 export function canShowAgentsBanner(chatEntitlementService: IChatEntitlementService): boolean {
+	return false;
 	const sentiment = chatEntitlementService.sentiment;
 	if (sentiment.hidden || sentiment.disabled) {
 		return false;
