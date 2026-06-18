@@ -128,9 +128,10 @@ jobs:
           pnpm install --no-frozen-lockfile
 
           # Sequential build — turbo's dependency graph sometimes races on CI
-          cd /tmp/Axon/packages/core && npx tsc --declaration && cd /tmp/Axon
-          cd /tmp/Axon/packages/host-node && npx tsc && cd /tmp/Axon
-          cd /tmp/Axon/packages/host-vscode && npx tsc && cd /tmp/Axon
+          # ✅ Fix: explicitly pass --outDir dist so .d.ts files always land in dist/
+          cd /tmp/Axon/packages/core && npx tsc --declaration --outDir dist && cd /tmp/Axon
+          cd /tmp/Axon/packages/host-node && npx tsc --outDir dist && cd /tmp/Axon
+          cd /tmp/Axon/packages/host-vscode && npx tsc --outDir dist && cd /tmp/Axon
 
           # ✅ 验证关键产物存在
           test -f /tmp/Axon/packages/core/dist/index.js       || (echo "core build missing" && exit 1)
@@ -139,9 +140,9 @@ jobs:
 
           # Symlink built packages into extension's node_modules
           mkdir -p "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon"
-          ln -sf /tmp/Axon/packages/core      "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/core"
+          ln -sf /tmp/Axon/packages/core        "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/core"
           ln -sf /tmp/Axon/packages/host-vscode "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/host-vscode"
-          ln -sf /tmp/Axon/packages/host-node "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/host-node"
+          ln -sf /tmp/Axon/packages/host-node   "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/host-node"
 
           # Bundle extension entry point
           cd "$GITHUB_WORKSPACE"
@@ -169,7 +170,6 @@ jobs:
             exit 1
           }
 
-      # ── 便携版 zip ──
       - name: Create portable zip
         shell: pwsh
         run: |
@@ -178,7 +178,6 @@ jobs:
           Compress-Archive -Path "$src\*" -DestinationPath $dst
           Write-Host "Portable zip: $dst ($((Get-Item $dst).Length) bytes)"
 
-      # ── 安装版 .exe（Inno Setup）──
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --yes --no-progress
@@ -241,8 +240,6 @@ jobs:
       - name: Setup native build environment
         run: node build/npm/preinstall.ts
 
-      # ✅ 新增：针对 Electron 重新编译所有 native addons（arm64）
-      # ✅ 对 Electron ABI 重编译所有 native 模块（解决 "原生模块版本不匹配" 崩溃）
       - name: Rebuild native addons for Electron (arm64)
         run: |
           npm exec @electron/rebuild -- --version $(node -p "require('./node_modules/electron/package.json').version") --arch arm64 --force
@@ -264,9 +261,10 @@ jobs:
           pnpm install --no-frozen-lockfile
 
           # Sequential build — turbo's dependency graph sometimes races on CI
-          cd /tmp/Axon/packages/core && npx tsc --declaration && cd /tmp/Axon
-          cd /tmp/Axon/packages/host-node && npx tsc && cd /tmp/Axon
-          cd /tmp/Axon/packages/host-vscode && npx tsc && cd /tmp/Axon
+          # ✅ Fix: explicitly pass --outDir dist so .d.ts files always land in dist/
+          cd /tmp/Axon/packages/core && npx tsc --declaration --outDir dist && cd /tmp/Axon
+          cd /tmp/Axon/packages/host-node && npx tsc --outDir dist && cd /tmp/Axon
+          cd /tmp/Axon/packages/host-vscode && npx tsc --outDir dist && cd /tmp/Axon
 
           # ✅ 验证关键产物存在
           test -f /tmp/Axon/packages/core/dist/index.js       || (echo "core build missing" && exit 1)
@@ -275,9 +273,9 @@ jobs:
 
           # Symlink built packages into extension's node_modules
           mkdir -p "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon"
-          ln -sf /tmp/Axon/packages/core      "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/core"
+          ln -sf /tmp/Axon/packages/core        "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/core"
           ln -sf /tmp/Axon/packages/host-vscode "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/host-vscode"
-          ln -sf /tmp/Axon/packages/host-node "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/host-node"
+          ln -sf /tmp/Axon/packages/host-node   "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon/host-node"
 
           # Bundle extension entry point
           cd "$GITHUB_WORKSPACE"
@@ -296,7 +294,6 @@ jobs:
           extension_js="$app_dir/resources/app/extensions/axon-ide/dist/extension.js"
           test -f "$extension_js" || (echo "Packaged Axon extension is missing: $extension_js" && exit 1)
 
-      # ✅ 新增：ad-hoc 签名，避免 macOS "已损坏" 提示
       - name: Ad-hoc sign (arm64)
         run: |
           APP="$(dirname "$PWD")/VSCode-darwin-arm64/Axon IDE.app"
@@ -346,10 +343,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # =========================================================================
-  # macOS x64 (Intel)
+  # macOS x64 (Intel) — disabled
   # =========================================================================
   build-macos-x64:
-    # Disabled: only build Windows x64 and macOS arm64 release assets.
     if: ${{ false }}
     name: macOS x64
     runs-on: macos-13
@@ -377,8 +373,6 @@ jobs:
       - name: Setup native build environment
         run: node build/npm/preinstall.ts
 
-      # ✅ 新增：针对 Electron 重新编译所有 native addons（x64）
-      # ✅ 对 Electron ABI 重编译所有 native 模块（解决 "原生模块版本不匹配" 崩溃）
       - name: Rebuild native addons for Electron (x64)
         run: |
           npm exec @electron/rebuild -- --version $(node -p "require('./node_modules/electron/package.json').version") --arch x64 --force
@@ -393,7 +387,6 @@ jobs:
       - name: Build & Package
         run: npm run gulp vscode-darwin-x64
 
-      # ✅ 新增：ad-hoc 签名，避免 macOS "已损坏" 提示
       - name: Ad-hoc sign (x64)
         run: |
           APP="$(dirname "$PWD")/VSCode-darwin-x64/Axon IDE.app"
