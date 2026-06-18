@@ -117,13 +117,18 @@ jobs:
         shell: bash
         run: |
           # npm ci --ignore-scripts skips node-pty's prebuild-install,
-          # so conpty.dll is never downloaded. Without it, @electron/rebuild
-          # will build pty.node from source but the prebuilt DLL stays missing,
-          # causing "Cannot find conpty.dll" at runtime.
-          ELECTRON_VER=$(node -p "require('./node_modules/electron/package.json').version")
+          # so conpty.dll is never downloaded. @electron/rebuild will
+          # build pty.node from source but conpty.dll is a prebuilt Win32
+          # DLL (not Node/Electron-specific) that isn't built by node-gyp.
+          #
+          # prebuild-install targeting Electron 42 fails (node-abi too old
+          # to know the ABI). Workaround: download the Node.js-targeted
+          # prebuilt package to obtain conpty.dll, then let @electron/rebuild
+          # overwrite pty.node with the correct Electron ABI version.
+          NODE_VER=$(node -v | sed 's/^v//')
           cd node_modules/node-pty
-          npx --yes prebuild-install --runtime electron --target "$ELECTRON_VER" --arch x64 || \
-          npx --yes prebuild-install --runtime napi --arch x64 || \
+          npx --yes prebuild-install --runtime node --target "$NODE_VER" --arch x64 2>/dev/null || \
+          npx --yes prebuild-install --runtime napi --arch x64 2>/dev/null || \
           echo "WARNING: Could not download node-pty prebuild, will build from source"
           cd "$GITHUB_WORKSPACE"
 
@@ -294,10 +299,10 @@ jobs:
 
       - name: Download node-pty prebuilt binaries
         run: |
-          ELECTRON_VER=$(node -p "require('./node_modules/electron/package.json').version")
+          NODE_VER=$(node -v | sed 's/^v//')
           cd node_modules/node-pty
-          npx --yes prebuild-install --runtime electron --target "$ELECTRON_VER" --arch arm64 || \
-          npx --yes prebuild-install --runtime napi --arch arm64 || \
+          npx --yes prebuild-install --runtime node --target "$NODE_VER" --arch arm64 2>/dev/null || \
+          npx --yes prebuild-install --runtime napi --arch arm64 2>/dev/null || \
           echo "WARNING: Could not download node-pty prebuild, will build from source"
           cd "$GITHUB_WORKSPACE"
 
