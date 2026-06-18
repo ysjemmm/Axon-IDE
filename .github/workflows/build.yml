@@ -257,7 +257,8 @@ jobs:
   # macOS x64 (Intel)
   # =========================================================================
   build-macos-x64:
-    if: ${{ inputs.platforms == 'all' || inputs.platforms == 'macos-only' }}
+    # Disabled: only build Windows x64 and macOS arm64 release assets.
+    if: ${{ false }}
     name: macOS x64
     runs-on: macos-13
     needs: prepare-release
