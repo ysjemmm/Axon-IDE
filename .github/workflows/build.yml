@@ -115,7 +115,15 @@ jobs:
 
       - name: Rebuild native addons for Electron (x64)
         run: |
+          # Backup prebuilt binaries (conpty.dll etc.) — @electron/rebuild --force
+          # cleans build/Release then only rebuilds .node files via node-gyp,
+          # so the platform-specific DLLs shipped by the npm package are lost.
+          mkdir -p /tmp/conpty-backup
+          cp -f node_modules/node-pty/build/Release/conpty/* /tmp/conpty-backup/ 2>/dev/null || true
           npm exec @electron/rebuild -- --version $(node -p "require('./node_modules/electron/package.json').version") --arch x64 --force
+          # Restore prebuilt binaries that @electron/rebuild cannot produce
+          mkdir -p node_modules/node-pty/build/Release/conpty
+          cp -f /tmp/conpty-backup/* node_modules/node-pty/build/Release/conpty/ 2>/dev/null || true
           echo "--- Rebuild verification ---"
           test -f node_modules/node-pty/build/Release/pty.node && echo "OK: pty.node" || echo "MISSING: pty.node"
           test -f node_modules/node-pty/build/Release/conpty/conpty.dll && echo "OK: conpty.dll" || echo "MISSING: conpty.dll"
@@ -281,7 +289,13 @@ jobs:
 
       - name: Rebuild native addons for Electron (arm64)
         run: |
+          # Backup prebuilt binaries before force rebuild
+          mkdir -p /tmp/node-pty-backup
+          cp -Rf node_modules/node-pty/build/Release/* /tmp/node-pty-backup/ 2>/dev/null || true
           npm exec @electron/rebuild -- --version $(node -p "require('./node_modules/electron/package.json').version") --arch arm64 --force
+          # Restore prebuilt binaries that node-gyp cannot produce
+          mkdir -p node_modules/node-pty/build/Release
+          cp -Rf /tmp/node-pty-backup/* node_modules/node-pty/build/Release/ 2>/dev/null || true
           echo "--- Rebuild verification ---"
           test -f node_modules/node-pty/build/Release/pty.node && echo "OK: pty.node" || echo "MISSING: pty.node"
 
