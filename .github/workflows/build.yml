@@ -127,8 +127,6 @@ jobs:
           corepack enable
           pnpm install --no-frozen-lockfile --filter @axon/core --filter @axon/host-node --filter @axon/host-vscode
 
-          # Sequential build �?turbo's dependency graph sometimes races on CI
-          # �?Fix: explicitly pass --outDir dist so .d.ts files always land in dist/
           cd /tmp/Axon/packages/core && npx tsc --declaration --outDir dist && cd /tmp/Axon
           cd /tmp/Axon/packages/host-node && npx tsc --outDir dist && cd /tmp/Axon
           cd /tmp/Axon/packages/host-vscode && npx tsc --outDir dist && cd /tmp/Axon
@@ -136,7 +134,7 @@ jobs:
           # Build web UI (React frontend for the chat panel)
           cd /tmp/Axon/web && npm install && AXON_WEB_BASE="./" npx vite build && cd /tmp/Axon
 
-          # �?验证关键产物存在
+          # 验证关键产物存在
           test -f /tmp/Axon/packages/core/dist/index.js       || (echo "core build missing" && exit 1)
           test -f /tmp/Axon/packages/core/dist/index.d.ts     || (echo "core types missing" && exit 1)
           test -f /tmp/Axon/packages/host-node/dist/index.js  || (echo "host-node build missing" && exit 1)
@@ -155,7 +153,6 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/extensions/axon-ide/media/web"
           cp -R /tmp/Axon/web/dist/* "$GITHUB_WORKSPACE/extensions/axon-ide/media/web/"
 
-          # Clean up symlinked @axon packages �?they show as "extraneous"
           # in the downstream gulp npm list check and would fail the build.
           rm -rf "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon"
 
@@ -280,8 +277,8 @@ jobs:
           corepack enable
           pnpm install --no-frozen-lockfile --filter @axon/core --filter @axon/host-node --filter @axon/host-vscode
 
-          # Sequential build �?turbo's dependency graph sometimes races on CI
-          # �?Fix: explicitly pass --outDir dist so .d.ts files always land in dist/
+          # Sequential build (avoid turbo race on CI)
+          # Note: --outDir dist ensures .d.ts files always land in dist/
           cd /tmp/Axon/packages/core && npx tsc --declaration --outDir dist && cd /tmp/Axon
           cd /tmp/Axon/packages/host-node && npx tsc --outDir dist && cd /tmp/Axon
           cd /tmp/Axon/packages/host-vscode && npx tsc --outDir dist && cd /tmp/Axon
@@ -289,7 +286,7 @@ jobs:
           # Build web UI (React frontend for the chat panel)
           cd /tmp/Axon/web && npm install && AXON_WEB_BASE="./" npx vite build && cd /tmp/Axon
 
-          # �?验证关键产物存在
+          # Verify key build artifacts exist
           test -f /tmp/Axon/packages/core/dist/index.js       || (echo "core build missing" && exit 1)
           test -f /tmp/Axon/packages/core/dist/index.d.ts     || (echo "core types missing" && exit 1)
           test -f /tmp/Axon/packages/host-node/dist/index.js  || (echo "host-node build missing" && exit 1)
@@ -308,8 +305,8 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/extensions/axon-ide/media/web"
           cp -R /tmp/Axon/web/dist/* "$GITHUB_WORKSPACE/extensions/axon-ide/media/web/"
 
-          # Clean up symlinked @axon packages �?they show as "extraneous"
-          # in the downstream gulp npm list check and would fail the build.
+          # Clean up symlinked @axon packages (they show as "extraneous"
+          # in the downstream gulp npm list check and would fail the build).
           rm -rf "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon"
 
       - name: Verify Axon extension bundle
@@ -382,7 +379,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # =========================================================================
-  # macOS x64 (Intel) �?disabled
+  # macOS x64 (Intel) — disabled
   # =========================================================================
   build-macos-x64:
     if: ${{ false }}
