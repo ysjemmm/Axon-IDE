@@ -128,7 +128,7 @@ jobs:
           pnpm install --no-frozen-lockfile
 
           # Sequential build — turbo's dependency graph sometimes races on CI
-          cd /tmp/Axon/packages/core && npx tsc -b && cd /tmp/Axon
+          cd /tmp/Axon/packages/core && npx tsc && cd /tmp/Axon
           cd /tmp/Axon/packages/host-node && npx tsc && cd /tmp/Axon
           cd /tmp/Axon/packages/host-vscode && npx tsc && cd /tmp/Axon
 
@@ -264,7 +264,7 @@ jobs:
           pnpm install --no-frozen-lockfile
 
           # Sequential build — turbo's dependency graph sometimes races on CI
-          cd /tmp/Axon/packages/core && npx tsc -b && cd /tmp/Axon
+          cd /tmp/Axon/packages/core && npx tsc && cd /tmp/Axon
           cd /tmp/Axon/packages/host-node && npx tsc && cd /tmp/Axon
           cd /tmp/Axon/packages/host-vscode && npx tsc && cd /tmp/Axon
 
