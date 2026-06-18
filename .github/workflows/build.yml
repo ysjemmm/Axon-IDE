@@ -113,23 +113,17 @@ jobs:
         env:
           vs2022_install: ${{ env.VS2022_INSTALL }}
 
-      - name: Download node-pty prebuilt binaries
+      - name: Build node-pty from source (produces conpty.dll)
         shell: bash
         run: |
           # npm ci --ignore-scripts skips node-pty's prebuild-install,
-          # so conpty.dll is never downloaded. @electron/rebuild will
-          # build pty.node from source but conpty.dll is a prebuilt Win32
-          # DLL (not Node/Electron-specific) that isn't built by node-gyp.
-          #
-          # prebuild-install targeting Electron 42 fails (node-abi too old
-          # to know the ABI). Workaround: download the Node.js-targeted
-          # prebuilt package to obtain conpty.dll, then let @electron/rebuild
-          # overwrite pty.node with the correct Electron ABI version.
-          NODE_VER=$(node -v | sed 's/^v//')
+          # so build/Release is empty. node-gyp rebuild compiles ALL
+          # targets from C++ source, including conpty.dll (the conpty
+          # target in binding.gyp). @electron/rebuild below will then
+          # overwrite pty.node with the Electron ABI version, but we
+          # snapshot conpty.dll first and restore it after.
           cd node_modules/node-pty
-          npx --yes prebuild-install --runtime node --target "$NODE_VER" --arch x64 2>/dev/null || \
-          npx --yes prebuild-install --runtime napi --arch x64 2>/dev/null || \
-          echo "WARNING: Could not download node-pty prebuild, will build from source"
+          node-gyp rebuild
           cd "$GITHUB_WORKSPACE"
 
       - name: Rebuild native addons for Electron (x64)
@@ -296,18 +290,6 @@ jobs:
 
       - name: Setup native build environment
         run: node build/npm/preinstall.ts
-
-      - name: Download node-pty prebuilt binaries
-        run: |
-          NODE_VER=$(node -v | sed 's/^v//')
-          cd node_modules/node-pty
-          # Node.js-targeted prebuilt downloads conpty.dll (Windows-only).
-          # macOS has no conpty — the fork-based PTY doesn't need it,
-          # so prebuild-install will warn and that's expected.
-          npx --yes prebuild-install --runtime node --target "$NODE_VER" --arch arm64 2>/dev/null || \
-          npx --yes prebuild-install --runtime napi --arch arm64 2>/dev/null || \
-          echo "NOTE: node-pty prebuild unavailable for darwin-arm64 (expected — conpty is Windows-only, fork PTY needs no DLL)"
-          cd "$GITHUB_WORKSPACE"
 
       - name: Rebuild native addons for Electron (arm64)
         run: |
