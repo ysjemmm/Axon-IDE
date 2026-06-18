@@ -164,6 +164,15 @@ jobs:
         run: npm run gulp vscode-win32-x64
         shell: bash
 
+      - name: Copy Axon extension into packaged app
+        shell: bash
+        run: |
+          app_ext="$(dirname "$PWD")/VSCode-win32-x64/resources/app/extensions/axon-ide"
+          mkdir -p "$app_ext"
+          cp -R extensions/axon-ide/dist "$app_ext/"
+          cp extensions/axon-ide/package.json "$app_ext/"
+          cp -R extensions/axon-ide/media "$app_ext/" 2>/dev/null || true
+
       - name: Verify packaged Axon extension
         shell: pwsh
         run: |
@@ -295,6 +304,14 @@ jobs:
 
       - name: Build & Package
         run: npm run gulp vscode-darwin-arm64
+
+      - name: Copy Axon extension into packaged app
+        run: |
+          app_ext="$(dirname "$PWD")/VSCode-darwin-arm64/resources/app/extensions/axon-ide"
+          mkdir -p "$app_ext"
+          cp -R extensions/axon-ide/dist "$app_ext/"
+          cp extensions/axon-ide/package.json "$app_ext/"
+          cp -R extensions/axon-ide/media "$app_ext/" 2>/dev/null || true
 
       - name: Verify packaged Axon extension
         run: |
