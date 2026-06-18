@@ -70,7 +70,7 @@ function fromLocal(extensionPath: string, forWeb: boolean, _disableMangle: boole
 
 	// Fallback: check for .esbuild.mts/.esbuild.ts (used by extensions with their own build system, e.g. copilot)
 	if (!hasEsbuild && !forWeb) {
-		for (const fallback of ['.esbuild.mts', '.esbuild.ts']) {
+		for (const fallback of ['.esbuild.mts', '.esbuild.ts', '.esbuild.mjs']) {
 			if (fs.existsSync(path.join(extensionPath, fallback))) {
 				esbuildConfigFileName = fallback;
 				hasEsbuild = true;
