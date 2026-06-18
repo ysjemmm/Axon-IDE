@@ -125,7 +125,7 @@ jobs:
           # Build the packages needed by the extension
           cd /tmp/Axon
           corepack enable
-          pnpm install --frozen-lockfile
+          pnpm install --no-frozen-lockfile
           pnpm --filter @axon/core --filter @axon/host-vscode build
           # Symlink built packages into extension's node_modules
           mkdir -p "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon"
@@ -250,7 +250,7 @@ jobs:
           # Build the packages needed by the extension
           cd /tmp/Axon
           corepack enable
-          pnpm install --frozen-lockfile
+          pnpm install --no-frozen-lockfile
           pnpm --filter @axon/core --filter @axon/host-vscode build
           # Symlink built packages into extension's node_modules
           mkdir -p "$GITHUB_WORKSPACE/extensions/axon-ide/node_modules/@axon"
