@@ -125,7 +125,7 @@ jobs:
 
           cd /tmp/Axon
           corepack enable
-          pnpm install --no-frozen-lockfile
+          pnpm install --no-frozen-lockfile --filter @axon/core --filter @axon/host-node --filter @axon/host-vscode --filter web
 
           # Sequential build — turbo's dependency graph sometimes races on CI
           # ✅ Fix: explicitly pass --outDir dist so .d.ts files always land in dist/
@@ -134,7 +134,7 @@ jobs:
           cd /tmp/Axon/packages/host-vscode && npx tsc --outDir dist && cd /tmp/Axon
 
           # Build web UI (React frontend for the chat panel)
-          cd /tmp/Axon/web && pnpm install --no-frozen-lockfile && AXON_WEB_BASE="./" npx vite build && cd /tmp/Axon
+          AXON_WEB_BASE="./" pnpm --filter web exec vite build
 
           # ✅ 验证关键产物存在
           test -f /tmp/Axon/packages/core/dist/index.js       || (echo "core build missing" && exit 1)
@@ -278,7 +278,7 @@ jobs:
 
           cd /tmp/Axon
           corepack enable
-          pnpm install --no-frozen-lockfile
+          pnpm install --no-frozen-lockfile --filter @axon/core --filter @axon/host-node --filter @axon/host-vscode --filter web
 
           # Sequential build — turbo's dependency graph sometimes races on CI
           # ✅ Fix: explicitly pass --outDir dist so .d.ts files always land in dist/
@@ -287,7 +287,7 @@ jobs:
           cd /tmp/Axon/packages/host-vscode && npx tsc --outDir dist && cd /tmp/Axon
 
           # Build web UI (React frontend for the chat panel)
-          cd /tmp/Axon/web && pnpm install --no-frozen-lockfile && AXON_WEB_BASE="./" npx vite build && cd /tmp/Axon
+          AXON_WEB_BASE="./" pnpm --filter web exec vite build
 
           # ✅ 验证关键产物存在
           test -f /tmp/Axon/packages/core/dist/index.js       || (echo "core build missing" && exit 1)
