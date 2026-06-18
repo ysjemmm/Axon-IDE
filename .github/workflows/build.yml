@@ -113,11 +113,25 @@ jobs:
         env:
           vs2022_install: ${{ env.VS2022_INSTALL }}
 
+      - name: Download node-pty prebuilt binaries
+        shell: bash
+        run: |
+          # npm ci --ignore-scripts skips node-pty's prebuild-install,
+          # so conpty.dll is never downloaded. Without it, @electron/rebuild
+          # will build pty.node from source but the prebuilt DLL stays missing,
+          # causing "Cannot find conpty.dll" at runtime.
+          ELECTRON_VER=$(node -p "require('./node_modules/electron/package.json').version")
+          cd node_modules/node-pty
+          npx --yes prebuild-install --runtime electron --target "$ELECTRON_VER" --arch x64 || \
+          npx --yes prebuild-install --runtime napi --arch x64 || \
+          echo "WARNING: Could not download node-pty prebuild, will build from source"
+          cd "$GITHUB_WORKSPACE"
+
       - name: Rebuild native addons for Electron (x64)
         run: |
           # @electron/rebuild --force wipes build/Release entirely, then only
           # rebuilds .node files via node-gyp. Prebuilt DLLs (conpty.dll) are lost.
-          # Fix: snapshot before, rebuild, restore only missing files (-n = no-clobber).
+          # Snapshot before, rebuild, restore only missing files (-n = no-clobber).
           mkdir -p /tmp/node-pty-snapshot
           cp -R node_modules/node-pty/build/Release/. /tmp/node-pty-snapshot/ 2>/dev/null || true
           npm exec @electron/rebuild -- --version $(node -p "require('./node_modules/electron/package.json').version") --arch x64 --force
@@ -207,7 +221,7 @@ jobs:
           }
           # Check node-pty (terminal native addon)
           $conpty = Join-Path $appDir "resources\app\node_modules\node-pty\build\Release\conpty\conpty.dll"
-          if (Test-Path $conpty) { Write-Host "OK: conpty.dll" } else { Write-Warning "MISSING: conpty.dll" }
+          if (Test-Path $conpty) { Write-Host "OK: conpty.dll" } else { Write-Error "MISSING: conpty.dll — terminal will fail"; exit 1 }
 
       - name: Create portable zip
         shell: pwsh
@@ -277,6 +291,15 @@ jobs:
 
       - name: Setup native build environment
         run: node build/npm/preinstall.ts
+
+      - name: Download node-pty prebuilt binaries
+        run: |
+          ELECTRON_VER=$(node -p "require('./node_modules/electron/package.json').version")
+          cd node_modules/node-pty
+          npx --yes prebuild-install --runtime electron --target "$ELECTRON_VER" --arch arm64 || \
+          npx --yes prebuild-install --runtime napi --arch arm64 || \
+          echo "WARNING: Could not download node-pty prebuild, will build from source"
+          cd "$GITHUB_WORKSPACE"
 
       - name: Rebuild native addons for Electron (arm64)
         run: |
