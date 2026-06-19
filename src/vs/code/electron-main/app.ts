@@ -16,7 +16,7 @@ import { getPathLabel } from '../../base/common/labels.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../base/common/lifecycle.js';
 import { Schemas, VSCODE_AUTHORITY } from '../../base/common/network.js';
 import { join, posix } from '../../base/common/path.js';
-import { IProcessEnvironment, isLinux, isLinuxSnap, isMacintosh, isWindows, OS } from '../../base/common/platform.js';
+import { IProcessEnvironment, isLinux, isMacintosh, isWindows, OS } from '../../base/common/platform.js';
 import { assertType } from '../../base/common/types.js';
 import { URI } from '../../base/common/uri.js';
 import { generateUuid } from '../../base/common/uuid.js';
@@ -83,10 +83,7 @@ import { getPiiPathsFromEnvironment, getTelemetryLevel, isInternalTelemetry, Nul
 import { IUpdateService } from '../../platform/update/common/update.js';
 import { UpdateChannel } from '../../platform/update/common/updateIpc.js';
 import { NotAvailableUpdateDialog } from '../../platform/update/electron-main/notAvailableUpdateDialog.js';
-import { DarwinUpdateService } from '../../platform/update/electron-main/updateService.darwin.js';
-import { LinuxUpdateService } from '../../platform/update/electron-main/updateService.linux.js';
-import { SnapUpdateService } from '../../platform/update/electron-main/updateService.snap.js';
-import { Win32UpdateService } from '../../platform/update/electron-main/updateService.win32.js';
+import { AxonUpdateService } from '../../platform/update/electron-main/updateService.axon.js';
 import { IOpenURLOptions, IURLService } from '../../platform/url/common/url.js';
 import { URLHandlerChannelClient, URLHandlerRouter } from '../../platform/url/common/urlIpc.js';
 import { NativeURLService } from '../../platform/url/common/urlService.js';
@@ -1084,19 +1081,15 @@ export class CodeApplication extends Disposable {
 		// Update
 		switch (process.platform) {
 			case 'win32':
-				services.set(IUpdateService, new SyncDescriptor(Win32UpdateService));
+				services.set(IUpdateService, new SyncDescriptor(AxonUpdateService));
 				break;
 
 			case 'linux':
-				if (isLinuxSnap) {
-					services.set(IUpdateService, new SyncDescriptor(SnapUpdateService, [process.env['SNAP'], process.env['SNAP_REVISION']]));
-				} else {
-					services.set(IUpdateService, new SyncDescriptor(LinuxUpdateService));
-				}
+				services.set(IUpdateService, new SyncDescriptor(AxonUpdateService));
 				break;
 
 			case 'darwin':
-				services.set(IUpdateService, new SyncDescriptor(DarwinUpdateService));
+				services.set(IUpdateService, new SyncDescriptor(AxonUpdateService));
 				break;
 		}
 
