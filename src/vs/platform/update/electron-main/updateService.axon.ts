@@ -11,7 +11,7 @@
 
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
-import { mkdir } from 'fs/promises';
+import { mkdir, readFile, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import * as path from '../../../base/common/path.js';
 import { Emitter, Event } from '../../../base/common/event.js';
@@ -46,11 +46,13 @@ interface IGitHubRelease {
 	name: string;
 	assets: IGitHubAsset[];
 	html_url: string;
+	published_at: string;
 }
 
-/** Strip leading 'v' prefix from a tag to get a semver string. */
+/** Strip leading 'v' prefix and build suffix from a tag to get a semver string. */
 function parseVersion(tag: string): string {
-	return tag.replace(/^v/, '');
+	// v1.0.0-build.5 → 1.0.0
+	return tag.replace(/^v/, '').split('-')[0];
 }
 
 /** Simple semver comparison: returns positive if a > b. */
@@ -116,6 +118,10 @@ const GITHUB_OWNER = 'ysjemmm';
 const GITHUB_REPO = 'Axon-IDE';
 const GITHUB_API_RELEASES_LATEST = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
 
+// allow-any-unicode-next-line
+/** 本地记录的上次更新时间戳文件（位于用户数据目录） */
+const LAST_UPDATE_TIMESTAMP_FILE = 'last-update-timestamp.txt';
+
 export class AxonUpdateService extends Disposable implements IUpdateService {
 
 	declare readonly _serviceBrand: undefined;
@@ -134,6 +140,10 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 
 	private downloadedPackagePath: string | undefined;
 
+	// allow-any-unicode-next-line
+	/** 最近一次 fetch 到的 release published_at，download 完成后写入本地时间戳文件 */
+	private lastFetchedPublishedAt: string | undefined;
+
 	constructor(
 		@ILifecycleMainService private readonly lifecycleMainService: ILifecycleMainService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
@@ -151,7 +161,8 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 
 	private async initialize(): Promise<void> {
 		// Do not enable auto-update in dev mode (running from source)
-		if (!this.environmentMainService.isBuilt) {
+		// unless AXON_DEV_UPDATE=true env var is set for testing
+		if (!this.environmentMainService.isBuilt && !process.env['AXON_DEV_UPDATE']) {
 			this.logService.info('axon-update#initialize - dev mode, updates disabled');
 			this.setState(State.Idle(UpdateType.Setup));
 			return;
@@ -192,10 +203,21 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 
 			this.logService.info(`axon-update#checkForUpdates - current: ${currentVersion}, latest: ${latestVersion}`);
 
-			if (compareVersions(latestVersion, currentVersion) <= 0) {
-				// Already up-to-date
+			if (compareVersions(latestVersion, currentVersion) < 0) {
+				// Current is newer than latest release (shouldn't normally happen)
 				this.setState(State.Idle(UpdateType.Setup, undefined, explicit || undefined));
 				return;
+			}
+
+			if (compareVersions(latestVersion, currentVersion) === 0) {
+				// Same version — check if release is newer than what was last installed
+				const lastTs = this.getLastUpdateTimestamp();
+				if (lastTs && new Date(release.published_at).getTime() <= lastTs) {
+					this.logService.info('axon-update#checkForUpdates - same version, no newer release');
+					this.setState(State.Idle(UpdateType.Setup, undefined, explicit || undefined));
+					return;
+				}
+				this.logService.info('axon-update#checkForUpdates - same version but release is newer, offering update');
 			}
 
 			// Find installer asset for current platform
@@ -212,6 +234,10 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 				url: asset.browser_download_url,
 			};
 
+		// allow-any-unicode-next-line
+			// 记住本次 release 的时间戳，download 完成后写入本地
+			this.lastFetchedPublishedAt = release.published_at;
+
 			// Start download
 			await this.doDownload(update, asset, explicit);
 		} catch (err) {
@@ -222,13 +248,24 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 	}
 
 	private async fetchLatestRelease(): Promise<IGitHubRelease | null> {
+		const headers: Record<string, string> = {
+			'Accept': 'application/vnd.github.v3+json',
+			'User-Agent': `AxonIDE/${this.productService.version}`,
+		};
+		// allow-any-unicode-next-line
+		// 优先读 product.json 里 CI 注入的 Token（最终用户零配置），
+		// allow-any-unicode-next-line
+		// 环境变量 AXON_GITHUB_TOKEN 作为本地开发覆盖
+		const token = (this.productService as any).updateGitHubToken
+			|| process.env['AXON_GITHUB_TOKEN']
+			|| undefined;
+		if (token) {
+			headers['Authorization'] = `Bearer ${token}`;
+		}
 		const context = await this.requestService.request(
 			{
 				url: GITHUB_API_RELEASES_LATEST,
-				headers: {
-					'Accept': 'application/vnd.github.v3+json',
-					'User-Agent': `AxonIDE/${this.productService.version}`,
-				},
+				headers,
 				callSite: 'axonUpdateService.fetchLatestRelease',
 			},
 			CancellationToken.None,
@@ -278,6 +315,12 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 
 			this.downloadedPackagePath = downloadPath;
 			this.setState(State.Ready(update, explicit, false));
+
+		// allow-any-unicode-next-line
+			// 记录本次 release 的时间戳，用于同版本增量更新判断
+			if (this.lastFetchedPublishedAt) {
+				await this.saveLastUpdateTimestamp(this.lastFetchedPublishedAt);
+			}
 
 			this.logService.info(`axon-update#doDownload - complete: ${downloadPath}`);
 		} catch (err) {
@@ -348,5 +391,34 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 
 	async setInternalOrg(_internalOrg: string | undefined): Promise<void> {
 		// Not applicable
+	}
+
+	// allow-any-unicode-next-line
+	// ── 同版本增量更新时间戳 ──────────────────────────────────────────────
+
+	private getTimestampFilePath(): string {
+		return path.join(this.environmentMainService.userDataPath, LAST_UPDATE_TIMESTAMP_FILE);
+	}
+
+	private getLastUpdateTimestamp(): number | undefined {
+		try {
+			const p = this.getTimestampFilePath();
+			if (!existsSync(p)) return undefined;
+			const raw = require('fs').readFileSync(p, 'utf-8').trim();
+			const ts = Number(raw);
+			return Number.isNaN(ts) ? undefined : ts;
+		} catch {
+			return undefined;
+		}
+	}
+
+	private async saveLastUpdateTimestamp(publishedAt: string): Promise<void> {
+		try {
+			const ts = new Date(publishedAt).getTime();
+			await writeFile(this.getTimestampFilePath(), String(ts), 'utf-8');
+			this.logService.info(`axon-update#saveTimestamp - saved ${publishedAt} (${ts})`);
+		} catch (err) {
+			this.logService.error('axon-update#saveTimestamp - failed', err);
+		}
 	}
 }

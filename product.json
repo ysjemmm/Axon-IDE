@@ -3,6 +3,9 @@
 	"nameLong": "Axon IDE",
 	"applicationName": "axon-ide",
 	"dataFolderName": ".axon-ide",
+	"version": "1.0.0",
+	"updateGitHubToken": "",
+	"updateGitHubRepo": "ysjemmm/Axon-IDE",
 	"sharedDataFolderName": ".axon-ide-shared",
 	"win32MutexName": "axonide",
 	"licenseName": "MIT",
@@ -105,5 +108,10 @@
 			"type": "light"
 		}
 	],
-	"sessionsWindowAllowedExtensions": []
+	"sessionsWindowAllowedExtensions": [],
+	"extensionsGallery": {
+		"serviceUrl": "https://marketplace.visualstudio.com/_apis/public/gallery",
+		"cacheUrl": "https://vscode.blob.core.windows.net/gallery/index",
+		"itemUrl": "https://marketplace.visualstudio.com/items"
+	}
 }

@@ -1173,7 +1173,7 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 			for (let index = 0; index < extensions.length; index++) {
 				const extension = extensions[index];
 				setTelemetry(extension, ((query.pageNumber - 1) * query.pageSize) + index, options.source);
-				if (areSameExtensions(extension.identifier, { id: this.productService.defaultChatAgent.extensionId, })) {
+				if (this.productService.defaultChatAgent && areSameExtensions(extension.identifier, { id: this.productService.defaultChatAgent.extensionId, })) {
 					defaultChatAgentExtension = extension;
 				} else {
 					result.push(extension);
