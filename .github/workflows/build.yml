@@ -167,12 +167,48 @@ jobs:
         shell: bash
 
       - name: Install extension dependencies
-        continue-on-error: true
         run: node build/npm/postinstall.ts
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           npm_command: install
+
+      - name: Verify and retry critical extension dependencies
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Extensions that bundle their own client code via esbuild.
+          # If postinstall's concurrent npm install skipped/failed any of these,
+          # the esbuild bundling step downstream will fail with "Could not resolve".
+          critical_exts=(
+            "extensions/css-language-features"
+            "extensions/html-language-features"
+            "extensions/json-language-features"
+            "extensions/markdown-language-features"
+            "extensions/typescript-language-features"
+            "extensions/markdown-math"
+            "extensions/ipynb"
+          )
+          failed=()
+          for ext in "${critical_exts[@]}"; do
+            if [ ! -d "$ext/node_modules" ] || [ -z "$(ls -A "$ext/node_modules" 2>/dev/null)" ]; then
+              echo "::warning::Missing node_modules for $ext"
+              failed+=("$ext")
+            fi
+          done
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::notice::Retrying npm install for ${#failed[@]} extension(s) that postinstall missed..."
+            for ext in "${failed[@]}"; do
+              echo "--- Reinstalling $ext ---"
+              (cd "$ext" && npm install) || {
+                echo "::error::Failed to install $ext after retry"
+                exit 1
+              }
+            done
+          else
+            echo "All critical extensions have node_modules."
+          fi
 
       - name: Build Axon extension bundle
         shell: bash
@@ -343,11 +379,47 @@ jobs:
           test -f node_modules/node-pty/build/Release/pty.node && echo "OK: pty.node" || echo "MISSING: pty.node"
 
       - name: Install extension dependencies
-        continue-on-error: true
         run: node build/npm/postinstall.ts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           npm_command: install
+
+      - name: Verify and retry critical extension dependencies
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Extensions that bundle their own client code via esbuild.
+          # If postinstall's concurrent npm install skipped/failed any of these,
+          # the esbuild bundling step downstream will fail with "Could not resolve".
+          critical_exts=(
+            "extensions/css-language-features"
+            "extensions/html-language-features"
+            "extensions/json-language-features"
+            "extensions/markdown-language-features"
+            "extensions/typescript-language-features"
+            "extensions/markdown-math"
+            "extensions/ipynb"
+          )
+          failed=()
+          for ext in "${critical_exts[@]}"; do
+            if [ ! -d "$ext/node_modules" ] || [ -z "$(ls -A "$ext/node_modules" 2>/dev/null)" ]; then
+              echo "::warning::Missing node_modules for $ext"
+              failed+=("$ext")
+            fi
+          done
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::notice::Retrying npm install for ${#failed[@]} extension(s) that postinstall missed..."
+            for ext in "${failed[@]}"; do
+              echo "--- Reinstalling $ext ---"
+              (cd "$ext" && npm install) || {
+                echo "::error::Failed to install $ext after retry"
+                exit 1
+              }
+            done
+          else
+            echo "All critical extensions have node_modules."
+          fi
 
       - name: Build Axon extension bundle
         run: |
@@ -509,7 +581,6 @@ jobs:
           npm exec @electron/rebuild -- --version $(node -p "require('./node_modules/electron/package.json').version") --arch x64 --force
 
       - name: Install extension dependencies
-        continue-on-error: true
         run: node build/npm/postinstall.ts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
