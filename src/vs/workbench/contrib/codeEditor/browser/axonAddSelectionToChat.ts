@@ -1,9 +1,9 @@
 /*---------------------------------------------------------------------------------------------
- *  Axon —— 编辑器选区「添加到对话」浮动按钮
+ *  Axon —— 编辑器选区浮动按钮组
  *
- *  在代码编辑器中选中文本并松开鼠标后，于选区上方浮出一个按钮；点击后把选中代码及其
- *  位置范围（行:列-行:列）通过命令 `axon.addEditorSelectionToChat` 交给 Axon 扩展，
- *  由其注入到对话输入框成为代码上下文芯片。
+ *  在代码编辑器中选中文本并松开鼠标后，于选区上方浮出一行按钮：
+ *    [添加到 Axon] [解释] [找Bug] [测试] [重构]
+ *  点击后把选中代码及其位置范围（行:列-行:列）通过对应命令交给 Axon 扩展处理。
  *--------------------------------------------------------------------------------------------*/
 
 import * as dom from '../../../../base/browser/dom.js';
@@ -16,8 +16,16 @@ import { ICommandService } from '../../../../platform/commands/common/commands.j
 
 const $ = dom.$;
 
-/** 触发注入的命令 id（由 Axon 扩展注册并处理）。 */
+/** 触发"添加到 Axon"的命令 id */
 const ADD_TO_CHAT_COMMAND_ID = 'axon.addEditorSelectionToChat';
+
+/** 一键操作：Action → 命令 id */
+const QUICK_ACTIONS: { action: string; label: string; command: string; cssClass: string }[] = [
+	{ action: 'explain',   label: localize('axon.editor.explain', '解释'),    command: 'axon.quickExplain',   cssClass: 'axon-quick-explain' },
+	{ action: 'findBug',   label: localize('axon.editor.findBug', '找Bug'),  command: 'axon.quickFindBug',   cssClass: 'axon-quick-findbug' },
+	{ action: 'test',       label: localize('axon.editor.test', '测试'),     command: 'axon.quickTest',      cssClass: 'axon-quick-test' },
+	{ action: 'refactor',  label: localize('axon.editor.refactor', '重构'),  command: 'axon.quickRefactor',  cssClass: 'axon-quick-refactor' },
+];
 
 /** 按钮自动消失延迟（ms） */
 const AUTO_HIDE_DELAY = 3000;
@@ -31,32 +39,74 @@ class AxonAddSelectionWidget implements IContentWidget {
 	private readonly _domNode: HTMLElement;
 	private _position: IContentWidgetPosition | null = null;
 
-	constructor(onAction: () => void) {
+	constructor(
+		onAddToChat: () => void,
+		onQuickAction: (action: string) => void,
+	) {
 		this._domNode = $('div.axon-add-selection-widget');
-		this._domNode.textContent = localize('axon.editor.addToChat', "添加到 Axon");
 		const s = this._domNode.style;
+		s.display = 'flex';
+		s.gap = '5px';
+		s.alignItems = 'center';
+		s.padding = '1px';
+		s.userSelect = 'none';
+		s.whiteSpace = 'nowrap';
+		s.zIndex = '100';
+
+		// ── "添加到 Axon" 按钮（主按钮） ──
+		const addBtn = $('div.axon-selection-btn.axon-selection-primary');
+		addBtn.textContent = localize('axon.editor.addToChat', '添加到 Axon');
+		this._styleButton(addBtn, true);
+		addBtn.addEventListener('mousedown', (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			onAddToChat();
+		});
+		addBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+		addBtn.addEventListener('mouseup', (e) => { e.preventDefault(); e.stopPropagation(); });
+		this._domNode.appendChild(addBtn);
+
+		// ── 分隔线 ──
+		const sep = $('div.axon-selection-sep');
+		sep.style.width = '1px';
+		sep.style.height = '16px';
+		sep.style.backgroundColor = 'var(--vscode-button-border, rgba(128,128,128,0.3))';
+		this._domNode.appendChild(sep);
+
+		// ── 一键操作按钮 ──
+		for (const qa of QUICK_ACTIONS) {
+			const btn = $('div.axon-selection-btn ' + qa.cssClass);
+			btn.textContent = qa.label;
+			this._styleButton(btn, false);
+			btn.addEventListener('mousedown', (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				onQuickAction(qa.action);
+			});
+			btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+			btn.addEventListener('mouseup', (e) => { e.preventDefault(); e.stopPropagation(); });
+			this._domNode.appendChild(btn);
+		}
+	}
+
+	private _styleButton(btn: HTMLElement, primary: boolean): void {
+		const s = btn.style;
 		s.padding = '2px 8px';
 		s.fontSize = '12px';
 		s.lineHeight = '16px';
 		s.borderRadius = '4px';
 		s.cursor = 'pointer';
-		s.userSelect = 'none';
-		s.whiteSpace = 'nowrap';
-		s.color = 'var(--vscode-button-foreground)';
-		s.backgroundColor = 'var(--vscode-button-background)';
-		s.border = '1px solid var(--vscode-button-border, transparent)';
+		s.display = 'inline-block';
 		s.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.28)';
-		s.zIndex = '100';
-		s.position = 'relative';
-		// 动作绑在 mousedown：在编辑器因点击清空选区之前就触发，并阻断冒泡避免编辑器处理该事件
-		this._domNode.addEventListener('mousedown', (e) => {
-			e.preventDefault();
-			e.stopPropagation();
-			onAction();
-		});
-		// 阻断 click/mouseup 冒泡，避免编辑器额外处理
-		this._domNode.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
-		this._domNode.addEventListener('mouseup', (e) => { e.preventDefault(); e.stopPropagation(); });
+		if (primary) {
+			s.color = 'var(--vscode-button-foreground)';
+			s.backgroundColor = 'var(--vscode-button-background)';
+			s.border = '1px solid var(--vscode-button-border, transparent)';
+		} else {
+			s.color = 'var(--vscode-button-secondaryForeground)';
+			s.backgroundColor = 'var(--vscode-button-secondaryBackground)';
+			s.border = '1px solid var(--vscode-button-secondaryBorder, transparent)';
+		}
 	}
 
 	getId(): string { return AxonAddSelectionWidget.ID; }
@@ -110,7 +160,6 @@ export class AxonAddSelectionToChatContribution extends Disposable implements IE
 			this._hide();
 			return;
 		}
-		// 先显示（_show 内部会 _hide 清旧状态），再写入缓存——顺序不能反，否则缓存会被 _show 清掉
 		this._show(selection.getStartPosition());
 		this._cached = {
 			text,
@@ -124,7 +173,10 @@ export class AxonAddSelectionToChatContribution extends Disposable implements IE
 
 	private _show(position: { lineNumber: number; column: number }): void {
 		this._hide();
-		this._widget = new AxonAddSelectionWidget(() => this._addToChat());
+		this._widget = new AxonAddSelectionWidget(
+			() => this._addToChat(),
+			(action) => this._quickAction(action),
+		);
 		this._widget.setPosition({
 			position,
 			preference: [ContentWidgetPositionPreference.ABOVE, ContentWidgetPositionPreference.BELOW],
@@ -139,7 +191,6 @@ export class AxonAddSelectionToChatContribution extends Disposable implements IE
 		if (!cached || !cached.text.trim()) {
 			return;
 		}
-		// 命令由 Axon 扩展注册；扩展未激活时静默忽略
 		this._commandService.executeCommand(ADD_TO_CHAT_COMMAND_ID, {
 			text: cached.text,
 			fileName: cached.fileName,
@@ -147,7 +198,25 @@ export class AxonAddSelectionToChatContribution extends Disposable implements IE
 			startColumn: cached.startColumn,
 			endLine: cached.endLine,
 			endColumn: cached.endColumn,
-		}).then(undefined, () => { /* 忽略：命令不存在或扩展未就绪 */ });
+		}).then(undefined, () => { /* 忽略 */ });
+	}
+
+	private _quickAction(action: string): void {
+		const cached = this._cached;
+		this._hide();
+		if (!cached || !cached.text.trim()) {
+			return;
+		}
+		const found = QUICK_ACTIONS.find((a) => a.action === action);
+		if (!found) return;
+		this._commandService.executeCommand(found.command, {
+			text: cached.text,
+			fileName: cached.fileName,
+			startLine: cached.startLine,
+			startColumn: cached.startColumn,
+			endLine: cached.endLine,
+			endColumn: cached.endColumn,
+		}).then(undefined, () => { /* 忽略 */ });
 	}
 
 	private _hide(): void {
