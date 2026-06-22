@@ -255,18 +255,17 @@ jobs:
           Compress-Archive -Path "$src\*" -DestinationPath $dst
           Write-Host "Portable zip: $dst ($((Get-Item $dst).Length) bytes)"
 
-      # - name: Install Inno Setup
-      #   shell: pwsh
-      #   run: choco install innosetup --yes --no-progress
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
 
-      # Skip Inno Setup installer during testing phase
-      # - name: Create installer
-      #   shell: pwsh
-      #   run: |
-      #     $appDir = Join-Path (Split-Path $PWD -Parent) "VSCode-win32-x64"
-      #     $outDir = "$PWD\.build"
-      #     & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppDir="$appDir" /DOutputDir="$outDir" build\win32\axon-ide.iss
-      #     Write-Host "Installer: $outDir\Axon-IDE-win32-x64-setup.exe ($((Get-Item "$outDir\Axon-IDE-win32-x64-setup.exe").Length) bytes)"
+      - name: Create installer
+        shell: pwsh
+        run: |
+          $appDir = Join-Path (Split-Path $PWD -Parent) "VSCode-win32-x64"
+          $outDir = "$PWD\.build"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppDir="$appDir" /DOutputDir="$outDir" build\win32\axon-ide.iss
+          Write-Host "Installer: $outDir\Axon-IDE-win32-x64-setup.exe ($((Get-Item "$outDir\Axon-IDE-win32-x64-setup.exe").Length) bytes)"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
@@ -274,6 +273,7 @@ jobs:
           name: Axon-IDE-win32-x64
           path: |
             .build/Axon-IDE-win32-x64-portable.zip
+            .build/Axon-IDE-win32-x64-setup.exe
           retention-days: 7
 
       - name: Upload Windows assets to GitHub Release
@@ -282,6 +282,7 @@ jobs:
           tag_name: ${{ needs.prepare-release.outputs.tag }}
           files: |
             .build/Axon-IDE-win32-x64-portable.zip
+            .build/Axon-IDE-win32-x64-setup.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
