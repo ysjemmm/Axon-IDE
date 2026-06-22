@@ -43,70 +43,81 @@ class AxonAddSelectionWidget implements IContentWidget {
 		onAddToChat: () => void,
 		onQuickAction: (action: string) => void,
 	) {
+		// ── 容器：统一的圆角卡片 ──
 		this._domNode = $('div.axon-add-selection-widget');
-		const s = this._domNode.style;
-		s.display = 'flex';
-		s.gap = '5px';
-		s.alignItems = 'center';
-		s.padding = '1px';
-		s.userSelect = 'none';
-		s.whiteSpace = 'nowrap';
-		s.zIndex = '100';
+		const cs = this._domNode.style;
+		cs.display = 'flex';
+		cs.alignItems = 'stretch';     // 子元素等高，分隔线自动撑满
+		cs.height = '26px';
+		cs.borderRadius = '6px';
+		cs.overflow = 'hidden';         // 圆角裁切子元素
+		cs.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.25)';
+		cs.border = '1px solid var(--vscode-widget-border, rgba(128,128,128,0.25))';
+		cs.backgroundColor = 'var(--vscode-editorWidget-background, #252526)';
+		cs.backdropFilter = 'blur(8px)';
+		cs.userSelect = 'none';
+		cs.whiteSpace = 'nowrap';
+		cs.zIndex = '100';
+		cs.fontFamily = 'var(--vscode-font-family, system-ui)';
+		cs.fontSize = '11.5px';
 
-		// ── "添加到 Axon" 按钮（主按钮） ──
-		const addBtn = $('div.axon-selection-btn.axon-selection-primary');
-		addBtn.textContent = localize('axon.editor.addToChat', '添加到 Axon');
-		this._styleButton(addBtn, true);
-		addBtn.addEventListener('mousedown', (e) => {
-			e.preventDefault();
-			e.stopPropagation();
-			onAddToChat();
-		});
-		addBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
-		addBtn.addEventListener('mouseup', (e) => { e.preventDefault(); e.stopPropagation(); });
+		// ── "添加到 Axon" 主按钮（左侧，主题色填充） ──
+		const addBtn = $('div.axon-selection-btn-primary');
+		addBtn.textContent = '✦ ' + localize('axon.editor.addToChat', '添加到 Axon');
+		const as = addBtn.style;
+		as.display = 'flex';
+		as.alignItems = 'center';
+		as.padding = '0 10px';
+		as.color = 'var(--vscode-button-foreground, #ffffff)';
+		as.backgroundColor = 'var(--vscode-button-background, #0e639c)';
+		as.cursor = 'pointer';
+		as.fontWeight = '600';
+		as.transition = 'filter 0.15s';
+		addBtn.addEventListener('mouseenter', () => { addBtn.style.filter = 'brightness(1.15)'; });
+		addBtn.addEventListener('mouseleave', () => { addBtn.style.filter = 'none'; });
+		this._bindAction(addBtn, onAddToChat);
 		this._domNode.appendChild(addBtn);
 
-		// ── 分隔线 ──
-		const sep = $('div.axon-selection-sep');
-		sep.style.width = '1px';
-		sep.style.height = '16px';
-		sep.style.backgroundColor = 'var(--vscode-button-border, rgba(128,128,128,0.3))';
-		this._domNode.appendChild(sep);
-
-		// ── 一键操作按钮 ──
+		// ── 四个快捷操作（右侧，透明底 hover 高亮） ──
 		for (const qa of QUICK_ACTIONS) {
-			const btn = $('div.axon-selection-btn ' + qa.cssClass);
+			// 竖分隔线
+			const sep = $('div.axon-selection-divider');
+			sep.style.width = '1px';
+			sep.style.backgroundColor = 'var(--vscode-widget-border, rgba(128,128,128,0.2))';
+			sep.style.flexShrink = '0';
+			this._domNode.appendChild(sep);
+
+			const btn = $('div.axon-selection-btn-quick');
 			btn.textContent = qa.label;
-			this._styleButton(btn, false);
-			btn.addEventListener('mousedown', (e) => {
-				e.preventDefault();
-				e.stopPropagation();
-				onQuickAction(qa.action);
+			const bs = btn.style;
+			bs.display = 'flex';
+			bs.alignItems = 'center';
+			bs.padding = '0 8px';
+			bs.color = 'var(--vscode-descriptionForeground, #cccccc)';
+			bs.cursor = 'pointer';
+			bs.transition = 'background-color 0.15s, color 0.15s';
+			btn.addEventListener('mouseenter', () => {
+				btn.style.backgroundColor = 'var(--vscode-list-hoverBackground, rgba(255,255,255,0.08))';
+				btn.style.color = 'var(--vscode-foreground, #ffffff)';
 			});
-			btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
-			btn.addEventListener('mouseup', (e) => { e.preventDefault(); e.stopPropagation(); });
+			btn.addEventListener('mouseleave', () => {
+				btn.style.backgroundColor = 'transparent';
+				btn.style.color = 'var(--vscode-descriptionForeground, #cccccc)';
+			});
+			this._bindAction(btn, () => onQuickAction(qa.action));
 			this._domNode.appendChild(btn);
 		}
 	}
 
-	private _styleButton(btn: HTMLElement, primary: boolean): void {
-		const s = btn.style;
-		s.padding = '2px 8px';
-		s.fontSize = '12px';
-		s.lineHeight = '16px';
-		s.borderRadius = '4px';
-		s.cursor = 'pointer';
-		s.display = 'inline-block';
-		s.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.28)';
-		if (primary) {
-			s.color = 'var(--vscode-button-foreground)';
-			s.backgroundColor = 'var(--vscode-button-background)';
-			s.border = '1px solid var(--vscode-button-border, transparent)';
-		} else {
-			s.color = 'var(--vscode-button-secondaryForeground)';
-			s.backgroundColor = 'var(--vscode-button-secondaryBackground)';
-			s.border = '1px solid var(--vscode-button-secondaryBorder, transparent)';
-		}
+	/** 绑定 mousedown 动作 + 阻断冒泡（点击瞬间编辑器可能清空选区，必须在 mousedown 就拿数据） */
+	private _bindAction(btn: HTMLElement, fn: () => void): void {
+		btn.addEventListener('mousedown', (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			fn();
+		});
+		btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+		btn.addEventListener('mouseup', (e) => { e.preventDefault(); e.stopPropagation(); });
 	}
 
 	getId(): string { return AxonAddSelectionWidget.ID; }
