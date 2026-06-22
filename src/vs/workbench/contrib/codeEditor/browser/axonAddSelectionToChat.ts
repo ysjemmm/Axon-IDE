@@ -43,14 +43,13 @@ class AxonAddSelectionWidget implements IContentWidget {
 		onAddToChat: () => void,
 		onQuickAction: (action: string) => void,
 	) {
-		// ── 容器：统一的圆角卡片 ──
+		// ── 容器：统一的圆角卡片（垂直布局） ──
 		this._domNode = $('div.axon-add-selection-widget');
 		const cs = this._domNode.style;
 		cs.display = 'flex';
-		cs.alignItems = 'stretch';     // 子元素等高，分隔线自动撑满
-		cs.height = '26px';
+		cs.flexDirection = 'column';       // 垂直排列
 		cs.borderRadius = '6px';
-		cs.overflow = 'hidden';         // 圆角裁切子元素
+		cs.overflow = 'hidden';
 		cs.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.25)';
 		cs.border = '1px solid var(--vscode-widget-border, rgba(128,128,128,0.25))';
 		cs.backgroundColor = 'var(--vscode-editorWidget-background, #252526)';
@@ -67,7 +66,8 @@ class AxonAddSelectionWidget implements IContentWidget {
 		const as = addBtn.style;
 		as.display = 'flex';
 		as.alignItems = 'center';
-		as.padding = '0 10px';
+		as.justifyContent = 'center';
+		as.padding = '5px 12px';
 		as.color = 'var(--vscode-button-foreground, #ffffff)';
 		as.backgroundColor = 'var(--vscode-button-background, #0e639c)';
 		as.cursor = 'pointer';
@@ -78,11 +78,11 @@ class AxonAddSelectionWidget implements IContentWidget {
 		this._bindAction(addBtn, onAddToChat);
 		this._domNode.appendChild(addBtn);
 
-		// ── 四个快捷操作（右侧，透明底 hover 高亮） ──
+		// ── 四个快捷操作（下方，透明底 hover 高亮） ──
 		for (const qa of QUICK_ACTIONS) {
-			// 竖分隔线
+			// 水平分隔线
 			const sep = $('div.axon-selection-divider');
-			sep.style.width = '1px';
+			sep.style.height = '1px';
 			sep.style.backgroundColor = 'var(--vscode-widget-border, rgba(128,128,128,0.2))';
 			sep.style.flexShrink = '0';
 			this._domNode.appendChild(sep);
@@ -92,7 +92,8 @@ class AxonAddSelectionWidget implements IContentWidget {
 			const bs = btn.style;
 			bs.display = 'flex';
 			bs.alignItems = 'center';
-			bs.padding = '0 8px';
+			bs.justifyContent = 'center';
+			bs.padding = '5px 12px';
 			bs.color = 'var(--vscode-descriptionForeground, #cccccc)';
 			bs.cursor = 'pointer';
 			bs.transition = 'background-color 0.15s, color 0.15s';
