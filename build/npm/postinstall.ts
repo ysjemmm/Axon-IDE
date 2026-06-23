@@ -65,11 +65,12 @@ async function npmInstallAsync(dir: string, opts?: child_process.SpawnOptions): 
 
 	const command = process.env['npm_command'] || 'install';
 
-	// .vscode/extensions/ 下的扩展是纯 JS，不需要原生编译。
-	// 它们的某些子依赖（如 @octokit 的 postinstall）在 Windows 上 spawn /bin/sh 失败（ENOENT），
-	// 导致整个 npm install 退出码为 1。对这些目录强制加 --ignore-scripts。
-	const isSelfhostExt = dir.startsWith('.vscode/extensions/');
-	const fullCommand = isSelfhostExt ? `${command} --ignore-scripts` : command;
+	// 扩展和测试目录的依赖都是纯 JS，不需要原生编译（node-pty 等原生模块在根目录装）。
+	// 这些目录的某些子依赖（如 @octokit 的 postinstall）会 spawn /bin/sh，
+	// 在 Windows 上报 ENOENT（/bin/sh 不存在），在 macOS 上也可能因环境问题失败，
+	// 导致 npm install 退出码为 1、CI 构建失败。对这些目录统一加 --ignore-scripts。
+	const isExtensionDir = dir !== '' && dir !== 'build' && dir !== 'build/rspack' && dir !== 'build/vite';
+	const fullCommand = isExtensionDir ? `${command} --ignore-scripts` : command;
 
 	if (process.env['VSCODE_REMOTE_DEPENDENCIES_CONTAINER_NAME'] && /^(.build\/distro\/npm\/)?remote$/.test(dir)) {
 		const syncOpts: child_process.SpawnSyncOptions = {
