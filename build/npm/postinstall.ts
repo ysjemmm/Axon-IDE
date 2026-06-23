@@ -65,6 +65,12 @@ async function npmInstallAsync(dir: string, opts?: child_process.SpawnOptions): 
 
 	const command = process.env['npm_command'] || 'install';
 
+	// .vscode/extensions/ 下的扩展是纯 JS，不需要原生编译。
+	// 它们的某些子依赖（如 @octokit 的 postinstall）在 Windows 上 spawn /bin/sh 失败（ENOENT），
+	// 导致整个 npm install 退出码为 1。对这些目录强制加 --ignore-scripts。
+	const isSelfhostExt = dir.startsWith('.vscode/extensions/');
+	const fullCommand = isSelfhostExt ? `${command} --ignore-scripts` : command;
+
 	if (process.env['VSCODE_REMOTE_DEPENDENCIES_CONTAINER_NAME'] && /^(.build\/distro\/npm\/)?remote$/.test(dir)) {
 		const syncOpts: child_process.SpawnSyncOptions = {
 			env: finalOpts.env,
@@ -91,7 +97,7 @@ async function npmInstallAsync(dir: string, opts?: child_process.SpawnOptions): 
 		run('sudo', ['chown', '-R', `${userinfo.uid}:${userinfo.gid}`, `${path.resolve(root, dir)}`], syncOpts);
 	} else {
 		log(dir, 'Installing dependencies...');
-		const output = await spawnAsync(npm, command.split(' '), finalOpts);
+		const output = await spawnAsync(npm, fullCommand.split(' '), finalOpts);
 		if (output.trim()) {
 			for (const line of output.trim().split('\n')) {
 				log(dir, line);
