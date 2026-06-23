@@ -68,9 +68,13 @@ async function npmInstallAsync(dir: string, opts?: child_process.SpawnOptions): 
 	// 扩展和测试目录的依赖都是纯 JS，不需要原生编译（node-pty 等原生模块在根目录装）。
 	// 这些目录的某些子依赖（如 @octokit 的 postinstall）会 spawn /bin/sh，
 	// 在 Windows 上报 ENOENT（/bin/sh 不存在），在 macOS 上也可能因环境问题失败，
-	// 导致 npm install 退出码为 1、CI 构建失败。对这些目录统一加 --ignore-scripts。
+	// 导致 npm install 退出码为 1、CI 构建失败。
+	// 用环境变量 npm_config_ignore_scripts=true 比 --ignore-scripts 命令行参数更可靠——
+	// npm 内部所有子进程和 lifecycle 阶段都会继承这个配置。
 	const isExtensionDir = dir !== '' && dir !== 'build' && dir !== 'build/rspack' && dir !== 'build/vite';
-	const fullCommand = isExtensionDir ? `${command} --ignore-scripts` : command;
+	if (isExtensionDir) {
+		finalOpts.env!['npm_config_ignore_scripts'] = 'true';
+	}
 
 	if (process.env['VSCODE_REMOTE_DEPENDENCIES_CONTAINER_NAME'] && /^(.build\/distro\/npm\/)?remote$/.test(dir)) {
 		const syncOpts: child_process.SpawnSyncOptions = {
@@ -98,7 +102,7 @@ async function npmInstallAsync(dir: string, opts?: child_process.SpawnOptions): 
 		run('sudo', ['chown', '-R', `${userinfo.uid}:${userinfo.gid}`, `${path.resolve(root, dir)}`], syncOpts);
 	} else {
 		log(dir, 'Installing dependencies...');
-		const output = await spawnAsync(npm, fullCommand.split(' '), finalOpts);
+		const output = await spawnAsync(npm, command.split(' '), finalOpts);
 		if (output.trim()) {
 			for (const line of output.trim().split('\n')) {
 				log(dir, line);
