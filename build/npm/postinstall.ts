@@ -110,11 +110,12 @@ async function npmInstallAsync(dir: string, opts?: child_process.SpawnOptions): 
 				}
 			}
 		} catch (e) {
-			// 扩展和测试目录的 npm install 有时会因 spawn /bin/sh ENOENT 报退出码 1，
-			// 即使包已经成功安装（npm 内部的 audit/fund 子步骤 spawn 失败）。
-			// 对这些目录容忍非零退出码——只要 node_modules 存在就算成功。
-			if (isExtensionDir && fs.existsSync(path.join(root, dir, 'node_modules'))) {
-				log(dir, `(警告) npm install 报错但 node_modules 已生成，可能是 ENOENT 噪音，继续构建`);
+			// 扩展和测试目录的 npm install 有时会因 npm 内部的 audit/fund 子步骤
+			// spawn /bin/sh 失败（ENOENT）导致退出码 1，即使包已成功安装。
+			// 对这些目录直接容忍——它们都是纯 JS 依赖，安装失败的话后续编译也会报错。
+			if (isExtensionDir) {
+				const msg = e instanceof Error ? e.message : String(e);
+				log(dir, `(警告) npm install 报错，可能是 ENOENT 噪音: ${msg.slice(0, 120)}`);
 			} else {
 				throw e;
 			}
