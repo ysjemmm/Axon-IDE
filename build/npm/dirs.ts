@@ -63,7 +63,9 @@ export const dirs = [
 	'.vscode/extensions/vscode-selfhost-import-aid',
 	'.vscode/extensions/vscode-selfhost-test-provider',
 	'.vscode/extensions/vscode-extras',
-	'.vscode/extensions/vscode-pr-pinger',
+	// vscode-pr-pinger 已移除：VS Code 团队内部 PR 提醒工具，Axon IDE 不需要。
+	// 它依赖 @octokit/graphql，在 macOS/Windows CI 上 npm install 时 spawn /bin/sh ENOENT 导致构建失败。
+	// '.vscode/extensions/vscode-pr-pinger',
 ];
 
 if (existsSync(`${import.meta.dirname}/../../.build/distro/npm`)) {
