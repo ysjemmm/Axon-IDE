@@ -3,7 +3,7 @@
 	"nameLong": "Axon IDE",
 	"applicationName": "axon-ide",
 	"dataFolderName": ".axon-ide",
-	"version": "1.106.0",
+	"version": "1.106.1",
 	"updateGitHubToken": "",
 	"updateGitHubRepo": "ysjemmm/Axon-IDE",
 	"sharedDataFolderName": ".axon-ide-shared",
