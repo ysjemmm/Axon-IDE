@@ -182,9 +182,7 @@ export class ChatSessionStore extends Disposable {
 	}
 
 	async storeSessions(sessions: ChatModel[]): Promise<void> {
-		console.warn(`[axon-debug][persist] ChatSessionStore.storeSessions count=${sessions.length} sessions=[${sessions.map(s => `${s.sessionResource.toString()}(req=${s.getRequests().length})`).join(', ')}]`);
 		if (this.shuttingDown) {
-			console.warn(`[axon-debug][persist] ChatSessionStore.storeSessions skipped: shuttingDown`);
 			// Don't start this task if we missed the chance to block shutdown
 			return;
 		}
@@ -206,9 +204,7 @@ export class ChatSessionStore extends Disposable {
 	}
 
 	async storeSessionsMetadataOnly(sessions: ChatModel[]): Promise<void> {
-		console.warn(`[axon-debug][persist] ChatSessionStore.storeSessionsMetadataOnly count=${sessions.length} sessions=[${sessions.map(s => s.sessionResource.toString()).join(', ')}]`);
 		if (this.shuttingDown) {
-			console.warn(`[axon-debug][persist] ChatSessionStore.storeSessionsMetadataOnly skipped: shuttingDown`);
 			// Don't start this task if we missed the chance to block shutdown
 			return;
 		}
