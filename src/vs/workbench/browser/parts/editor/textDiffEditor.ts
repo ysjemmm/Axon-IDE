@@ -128,6 +128,14 @@ export class TextDiffEditor extends AbstractTextEditor<IDiffEditorViewState> imp
 			const vm = resolvedDiffEditorModel.textDiffEditorModel ? control.createViewModel(resolvedDiffEditorModel.textDiffEditorModel) : null;
 			this._previousViewModel = vm;
 			await vm?.waitForDiff();
+
+			// Check for cancellation or disposal after async gap
+			// During waitForDiff(), the model may have been disposed (e.g. rapid tab switch),
+			// causing "Model is disposed!" when setModel tries to attach it.
+			if (token.isCancellationRequested || resolvedDiffEditorModel.isDisposed() || vm?.model.original.isDisposed() || vm?.model.modified?.isDisposed()) {
+				return undefined;
+			}
+
 			control.setModel(vm);
 
 			// Restore view state (unless provided by options)
