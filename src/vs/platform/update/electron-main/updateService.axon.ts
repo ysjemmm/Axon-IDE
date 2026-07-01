@@ -116,7 +116,7 @@ function findPlatformAsset(assets: IGitHubAsset[]): IGitHubAsset | undefined {
 // GitHub repository coordinates (matches reportIssueUrl in product.json)
 const GITHUB_OWNER = 'ysjemmm';
 const GITHUB_REPO = 'Axon-IDE';
-const GITHUB_API_RELEASES_LATEST = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
+const GITHUB_API_RELEASES_LATEST = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=1`;
 
 // allow-any-unicode-next-line
 /** 本地记录的上次更新时间戳文件（位于用户数据目录） */
@@ -274,18 +274,19 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 		const rateLimitTotal = context.res.headers['x-ratelimit-limit'];
 		this.logService.info(`axon-update#fetchLatestRelease - status=${context.res.statusCode} rateLimit=${rateLimit}/${rateLimitTotal}`);
 
-		if (context.res.statusCode === 404) {
-			this.logService.warn('axon-update#fetchLatestRelease - 404: no releases found on GitHub');
-			return null;
-		}
-
 		if (context.res.statusCode !== 200) {
 			this.logService.error(`axon-update#fetchLatestRelease - unexpected status ${context.res.statusCode}`);
 			throw new Error(`GitHub API returned ${context.res.statusCode}`);
 		}
 
-		const release = asJson<IGitHubRelease>(context);
-		this.logService.info(`axon-update#fetchLatestRelease - latest: ${release.tag_name} (published ${release.published_at})`);
+		const releases = asJson<IGitHubRelease[]>(context);
+		if (!Array.isArray(releases) || releases.length === 0) {
+			this.logService.warn('axon-update#fetchLatestRelease - no releases found on GitHub');
+			return null;
+		}
+
+		const release = releases[0];
+		this.logService.info(`axon-update#fetchLatestRelease - latest: ${release.tag_name} (published ${release.published_at}, prerelease=${release.prerelease})`);
 		return release;
 	}
 
