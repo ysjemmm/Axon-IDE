@@ -160,15 +160,10 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 	}
 
 	private async initialize(): Promise<void> {
-		// Do not enable auto-update in dev mode (running from source)
-		// unless AXON_DEV_UPDATE=true env var is set for testing
-		if (!this.environmentMainService.isBuilt && !process.env['AXON_DEV_UPDATE']) {
-			this.logService.info('axon-update#initialize - dev mode, updates disabled');
-			this.setState(State.Idle(UpdateType.Setup));
-			return;
-		}
-
+		// Axon: enable auto-update in dev mode so we can test it.
+		// The old isBuilt guard is removed — use update.mode=none to disable instead.
 		const updateMode = this.configurationService.getValue<string>('update.mode');
+		this.logService.info(`axon-update#initialize - update.mode=${updateMode}, isBuilt=${this.environmentMainService.isBuilt}`);
 		if (updateMode === 'none') {
 			this.logService.info('axon-update#initialize - updates disabled by user');
 			this.setState(State.Idle(UpdateType.Setup));
@@ -261,7 +256,11 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 			|| undefined;
 		if (token) {
 			headers['Authorization'] = `Bearer ${token}`;
+		} else {
+			this.logService.info('axon-update#fetchLatestRelease - no GitHub token configured; rate limit = 60 req/h per IP');
 		}
+		this.logService.info(`axon-update#fetchLatestRelease - fetching ${GITHUB_API_RELEASES_LATEST} hasToken=${!!token}`);
+
 		const context = await this.requestService.request(
 			{
 				url: GITHUB_API_RELEASES_LATEST,
@@ -271,11 +270,23 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 			CancellationToken.None,
 		);
 
+		const rateLimit = context.res.headers['x-ratelimit-remaining'];
+		const rateLimitTotal = context.res.headers['x-ratelimit-limit'];
+		this.logService.info(`axon-update#fetchLatestRelease - status=${context.res.statusCode} rateLimit=${rateLimit}/${rateLimitTotal}`);
+
 		if (context.res.statusCode === 404) {
+			this.logService.warn('axon-update#fetchLatestRelease - 404: no releases found on GitHub');
 			return null;
 		}
 
-		return asJson<IGitHubRelease>(context);
+		if (context.res.statusCode !== 200) {
+			this.logService.error(`axon-update#fetchLatestRelease - unexpected status ${context.res.statusCode}`);
+			throw new Error(`GitHub API returned ${context.res.statusCode}`);
+		}
+
+		const release = asJson<IGitHubRelease>(context);
+		this.logService.info(`axon-update#fetchLatestRelease - latest: ${release.tag_name} (published ${release.published_at})`);
+		return release;
 	}
 
 	private async doDownload(update: IUpdate, asset: IGitHubAsset, explicit: boolean): Promise<void> {
