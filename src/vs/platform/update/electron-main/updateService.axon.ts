@@ -179,7 +179,9 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 	}
 
 	async checkForUpdates(explicit: boolean): Promise<void> {
+		this.logService.info(`axon-update#checkForUpdates - START explicit=${explicit} state=${this._state.type}`);
 		if (this._state.type !== StateType.Idle && this._state.type !== StateType.Uninitialized) {
+			this.logService.info(`axon-update#checkForUpdates - SKIP: busy state=${this._state.type}`);
 			return;
 		}
 
@@ -189,6 +191,7 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 			const release = await this.fetchLatestRelease();
 
 			if (!release) {
+				this.logService.info('axon-update#checkForUpdates - no release available');
 				this.setState(State.Idle(UpdateType.Setup, undefined, explicit || undefined));
 				return;
 			}
@@ -200,6 +203,7 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 
 			if (compareVersions(latestVersion, currentVersion) < 0) {
 				// Current is newer than latest release (shouldn't normally happen)
+				this.logService.info(`axon-update#checkForUpdates - current(${currentVersion}) is newer than latest(${latestVersion}), skipping`);
 				this.setState(State.Idle(UpdateType.Setup, undefined, explicit || undefined));
 				return;
 			}
@@ -207,21 +211,26 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 			if (compareVersions(latestVersion, currentVersion) === 0) {
 				// Same version — check if release is newer than what was last installed
 				const lastTs = this.getLastUpdateTimestamp();
+				this.logService.info(`axon-update#checkForUpdates - same version, lastTs=${lastTs} publishedTs=${new Date(release.published_at).getTime()}`);
 				if (lastTs && new Date(release.published_at).getTime() <= lastTs) {
 					this.logService.info('axon-update#checkForUpdates - same version, no newer release');
 					this.setState(State.Idle(UpdateType.Setup, undefined, explicit || undefined));
 					return;
 				}
 				this.logService.info('axon-update#checkForUpdates - same version but release is newer, offering update');
+			} else {
+				this.logService.info(`axon-update#checkForUpdates - update available: ${currentVersion} -> ${latestVersion}`);
 			}
 
 			// Find installer asset for current platform
 			const asset = findPlatformAsset(release.assets);
 			if (!asset) {
-				this.logService.warn('axon-update#checkForUpdates - no matching asset found in release');
+				this.logService.warn(`axon-update#checkForUpdates - no matching asset. assets=[${release.assets?.map(a => a.name).join(', ')}] platform=${process.platform}-${process.arch}`);
 				this.setState(State.Idle(UpdateType.Setup, 'No installer found for this platform', explicit || undefined));
 				return;
 			}
+
+			this.logService.info(`axon-update#checkForUpdates - matched asset: ${asset.name} (${asset.size} bytes)`);
 
 			const update: IUpdate = {
 				version: release.tag_name,
@@ -298,6 +307,7 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 		const totalBytes = asset.size;
 		const startTime = Date.now();
 
+		this.logService.info(`axon-update#doDownload - START url=${update.url} target=${downloadPath} size=${totalBytes}`);
 		this.setState(State.Downloading(update, explicit, false, 0, totalBytes, startTime));
 
 		try {
