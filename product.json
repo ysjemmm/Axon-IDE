@@ -4,6 +4,7 @@
 	"applicationName": "axon-ide",
 	"dataFolderName": ".axon-ide",
 	"version": "1.106.1",
+	"updateUrl": "https://github.com/ysjemmm/Axon-IDE/releases",
 	"updateGitHubToken": "",
 	"updateGitHubRepo": "ysjemmm/Axon-IDE",
 	"sharedDataFolderName": ".axon-ide-shared",
