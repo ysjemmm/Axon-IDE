@@ -60,8 +60,8 @@ const compilations = [
 	'extensions/extension-editing/tsconfig.json',
 	'extensions/git/tsconfig.json',
 	'extensions/git-base/tsconfig.json',
-	'extensions/github/tsconfig.json',
-	'extensions/github-authentication/tsconfig.json',
+	// Axon: extensions/github removed (directory doesn't exist in this fork)
+	// Axon: extensions/github-authentication removed (directory doesn't exist in this fork)
 	'extensions/grunt/tsconfig.json',
 	'extensions/gulp/tsconfig.json',
 	'extensions/html-language-features/client/tsconfig.json',
