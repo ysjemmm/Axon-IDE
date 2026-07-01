@@ -44,6 +44,7 @@ import { KeyCode } from '../../../base/common/keyCodes.js';
 import { ACTIVITY_BAR_BADGE_BACKGROUND, ACTIVITY_BAR_BADGE_FOREGROUND } from '../../common/theme.js';
 import { IBaseActionViewItemOptions } from '../../../base/browser/ui/actionbar/actionViewItems.js';
 import { ICommandService } from '../../../platform/commands/common/commands.js';
+import { IUpdateService, StateType } from '../../../platform/update/common/update.js';
 
 export class GlobalCompositeBar extends Disposable {
 
@@ -584,6 +585,8 @@ export class GlobalActivityActionViewItem extends AbstractGlobalActivityActionVi
 
 	private profileBadge: HTMLElement | undefined;
 	private profileBadgeContent: HTMLElement | undefined;
+	private updateBadge: HTMLElement | undefined;
+	private updateAvailable = false;
 
 	constructor(
 		contextMenuActionsProvider: () => IAction[],
@@ -600,6 +603,7 @@ export class GlobalActivityActionViewItem extends AbstractGlobalActivityActionVi
 		@IKeybindingService keybindingService: IKeybindingService,
 		@IInstantiationService instantiationService: IInstantiationService,
 		@IActivityService activityService: IActivityService,
+		@IUpdateService private readonly updateService: IUpdateService | null,
 	) {
 		const action = instantiationService.createInstance(CompositeBarAction, {
 			id: GLOBAL_ACTIVITY_ID,
@@ -622,6 +626,26 @@ export class GlobalActivityActionViewItem extends AbstractGlobalActivityActionVi
 		this.profileBadge = append(container, $('.profile-badge'));
 		this.profileBadgeContent = append(this.profileBadge, $('.profile-badge-content'));
 		this.updateProfileBadge();
+
+		// Axon: yellow dot when update available. Initially hidden; wired to updateService state.
+		this.updateBadge = append(container, $('.axon-update-badge'));
+		hide(this.updateBadge);
+
+		if (this.updateService) {
+			const check = (s: { type: StateType }) => {
+				const available = s.type === StateType.AvailableForDownload
+					|| s.type === StateType.Downloaded
+					|| s.type === StateType.Ready;
+				if (available !== this.updateAvailable) {
+					this.updateAvailable = available;
+					if (this.updateBadge) {
+						available ? show(this.updateBadge) : hide(this.updateBadge);
+					}
+				}
+			};
+			check(this.updateService.state);
+			this._register(this.updateService.onStateChange(check));
+		}
 	}
 
 	private updateProfileBadge(): void {

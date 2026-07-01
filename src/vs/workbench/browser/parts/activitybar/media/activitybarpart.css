@@ -72,3 +72,16 @@
 	width: 100%;
 	height: 35px;
 }
+
+/* Axon: 更新提示黄点（设置图标右上角） */
+.monaco-workbench .activitybar .axon-update-badge {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background-color: #eab308; /* yellow-500 */
+	box-shadow: 0 0 4px rgba(234, 179, 8, 0.6);
+	z-index: 1;
+}
