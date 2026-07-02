@@ -47,6 +47,7 @@ interface IGitHubRelease {
 	assets: IGitHubAsset[];
 	html_url: string;
 	published_at: string;
+	prerelease: boolean;
 }
 
 /** Strip leading 'v' prefix and build suffix from a tag to get a semver string. */
