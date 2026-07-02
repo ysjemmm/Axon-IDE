@@ -304,6 +304,11 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 				json.date = readISODate(out);
 				json.checksums = checksums;
 				json.version = version;
+				// Axon: CI/CD 从环境变量注入 GitHub Token（避免明文提交触发 Push Protection）
+				const ghToken = process.env['AXON_GITHUB_TOKEN'];
+				if (ghToken) {
+					json.updateGitHubToken = ghToken;
+				}
 				return json;
 			}))
 			.pipe(es.through(function (file) {
