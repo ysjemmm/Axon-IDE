@@ -124,3 +124,8 @@
 .monaco-workbench .sidebar.pane-composite-part > .title.has-composite-bar > .title-actions .monaco-action-bar .action-item {
 	max-width: 150px;
 }
+
+/* Axon: 确保侧边栏撑满整个高度 */
+.monaco-workbench .part.sidebar.left.pane-composite-part {
+	height: 100%;
+}
