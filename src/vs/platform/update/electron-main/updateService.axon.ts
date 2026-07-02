@@ -288,9 +288,9 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 			throw new Error(`GitHub API returned ${context.res.statusCode}`);
 		}
 
-		const releases = asJson<IGitHubRelease[]>(context);
+		const releases = await asJson<IGitHubRelease[]>(context);
 		if (!Array.isArray(releases) || releases.length === 0) {
-			this.logService.warn('axon-update#fetchLatestRelease - no releases found on GitHub');
+			this.logService.warn(`axon-update#fetchLatestRelease - no releases found on GitHub (releases type: ${typeof releases})`);
 			return null;
 		}
 
