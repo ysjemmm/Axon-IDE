@@ -7,6 +7,7 @@
 	"updateUrl": "https://github.com/ysjemmm/Axon-IDE/releases",
 	"updateGitHubToken": "",
 	"updateGitHubRepo": "ysjemmm/Axon-IDE",
+	"releaseNotesUrl": "https://github.com/ysjemmm/Axon-IDE/releases",
 	"sharedDataFolderName": ".axon-ide-shared",
 	"win32MutexName": "axonide",
 	"licenseName": "MIT",
