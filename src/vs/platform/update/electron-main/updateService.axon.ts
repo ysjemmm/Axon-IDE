@@ -144,6 +144,8 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 	// allow-any-unicode-next-line
 	/** 最近一次 fetch 到的 release published_at，download 完成后写入本地时间戳文件 */
 	private lastFetchedPublishedAt: string | undefined;
+	/** checkForUpdates 发现新版本后缓存的 update + asset，供 downloadUpdate 使用 */
+	private pendingUpdate: { update: IUpdate; asset: IGitHubAsset } | undefined;
 
 	constructor(
 		@ILifecycleMainService private readonly lifecycleMainService: ILifecycleMainService,
@@ -243,8 +245,11 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 			// 记住本次 release 的时间戳，download 完成后写入本地
 			this.lastFetchedPublishedAt = release.published_at;
 
-			// Start download
-			await this.doDownload(update, asset, explicit);
+			// 不自动下载：缓存 update + asset，设为 AvailableForDownload 状态，
+			// 前端会显示通知 "发现新版本 vX.Y.Z，是否立即下载？"，用户确认后才下载。
+			this.logService.info(`axon-update#checkForUpdates - update available, waiting for user confirmation to download`);
+			this.pendingUpdate = { update, asset };
+			this.setState(State.AvailableForDownload(update));
 		} catch (err) {
 			this.logService.error('axon-update#checkForUpdates - failed', err);
 			const message = explicit ? (err instanceof Error ? err.message : String(err)) : undefined;
@@ -352,8 +357,16 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 		}
 	}
 
-	async downloadUpdate(_explicit: boolean): Promise<void> {
-		// Download is triggered inline during checkForUpdates; no-op here.
+	async downloadUpdate(explicit: boolean): Promise<void> {
+		// checkForUpdates 发现新版本后会缓存 pendingUpdate 并设为 AvailableForDownload 状态。
+		// 用户点"Download Update"后调到这里，取出缓存开始下载。
+		if (!this.pendingUpdate) {
+			this.logService.warn('axon-update#downloadUpdate - no pending update (did checkForUpdates find one?)');
+			return;
+		}
+		const { update, asset } = this.pendingUpdate;
+		this.pendingUpdate = undefined; // 消费后清除
+		await this.doDownload(update, asset, explicit);
 	}
 
 	async applyUpdate(): Promise<void> {
