@@ -12,7 +12,6 @@
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { mkdir, readFile, writeFile } from 'fs/promises';
-import { tmpdir } from 'os';
 import * as path from '../../../base/common/path.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
@@ -123,6 +122,13 @@ const GITHUB_API_RELEASES_LATEST = `https://api.github.com/repos/${GITHUB_OWNER}
 /** 本地记录的上次更新时间戳文件（位于用户数据目录） */
 const LAST_UPDATE_TIMESTAMP_FILE = 'last-update-timestamp.txt';
 
+// allow-any-unicode-next-line
+/** 持久化已下载安装包路径（位于用户数据目录，重启后可恢复 Ready 状态） */
+const LAST_DOWNLOADED_PACKAGE_FILE = 'last-downloaded-package.txt';
+
+/** 下载进行中标记（记录 {url,targetPath}，重启后可识别中断的下载并清理） */
+const LAST_DOWNLOADING_PACKAGE_FILE = 'last-downloading-package.txt';
+
 export class AxonUpdateService extends Disposable implements IUpdateService {
 
 	declare readonly _serviceBrand: undefined;
@@ -176,6 +182,9 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 		}
 
 		this.setState(State.Idle(UpdateType.Setup));
+
+		// 启动时检查是否有上次下载待安装的包，有则直接恢复 Ready 状态
+		await this.tryRecoverDownloadedPackage();
 
 		// Auto-check 30s after startup (unless manual mode)
 		if (updateMode !== 'manual') {
@@ -308,7 +317,8 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 	}
 
 	private async doDownload(update: IUpdate, asset: IGitHubAsset, explicit: boolean): Promise<void> {
-		const cachePath = path.join(tmpdir(), 'axon-ide-update');
+		// 下载到 userDataPath 而非 tmpdir：系统重启/磁盘清理后安装包不会丢失
+		const cachePath = path.join(this.environmentMainService.userDataPath, 'axon-ide-update');
 		await mkdir(cachePath, { recursive: true });
 
 		const downloadPath = path.join(cachePath, asset.name);
@@ -317,6 +327,9 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 
 		this.logService.info(`axon-update#doDownload - START url=${update.url} target=${downloadPath} size=${totalBytes}`);
 		this.setState(State.Downloading(update, explicit, false, 0, totalBytes, startTime));
+
+		// 写入"下载中"标记，即使中途崩溃/关机，下次启动也能识别并清理
+		await this.saveDownloadingPackagePath(downloadPath, update.url!);
 
 		// 创建 CancellationToken 用于支持取消下载
 		this.downloadCancellationTokenSource = new CancellationTokenSource();
@@ -352,6 +365,13 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 			await this.fileService.writeFile(URI.file(downloadPath), progressStream);
 
 			this.downloadedPackagePath = downloadPath;
+			// allow-any-unicode-next-line
+			// 持久化下载路径：即使关闭 IDE 再重启，也能恢复到 Ready 状态
+			await this.saveDownloadedPackagePath(downloadPath);
+			// 清除"下载中"标记——下载已完整完成
+			await this.clearDownloadingPackagePath();
+			this.logService.info(`axon-update#doDownload - persisted path: ${downloadPath}`);
+
 			this.setState(State.Ready(update, explicit, false));
 
 		// allow-any-unicode-next-line
@@ -362,6 +382,8 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 
 			this.logService.info(`axon-update#doDownload - complete: ${downloadPath}`);
 		} catch (err) {
+			// 下载失败时也清除进度标记
+			await this.clearDownloadingPackagePath();
 			if (token.isCancellationRequested) {
 				this.logService.info('axon-update#doDownload - cancelled by user');
 				this.setState(State.Idle(UpdateType.Setup));
@@ -399,33 +421,35 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 	}
 
 	async quitAndInstall(): Promise<void> {
-		if (this._state.type !== StateType.Ready || !this.downloadedPackagePath) {
+		// 优先用内存中的路径，fallback 到持久化的缓存路径
+		const pkgPath = this.downloadedPackagePath || this.getCachedDownloadedPackagePath();
+		if (this._state.type !== StateType.Ready || !pkgPath) {
 			return;
 		}
 
-		if (!existsSync(this.downloadedPackagePath)) {
+		if (!existsSync(pkgPath)) {
 			this.logService.error('axon-update#quitAndInstall - package file missing');
 			this.setState(State.Idle(UpdateType.Setup, 'Installer file not found'));
 			return;
 		}
 
-		this.logService.info(`axon-update#quitAndInstall - launching: ${this.downloadedPackagePath}`);
+		this.logService.info(`axon-update#quitAndInstall - launching: ${pkgPath}`);
 
 		const platform = process.platform;
 
 		if (platform === 'win32') {
 			// Windows: silent Inno Setup installer
-			spawn(this.downloadedPackagePath, ['/silent', '/log', '/nocloseapplications', '/mergetasks=runcode,!desktopicon,!quicklaunchicon'], {
+			spawn(pkgPath, ['/silent', '/log', '/nocloseapplications', '/mergetasks=runcode,!desktopicon,!quicklaunchicon'], {
 				detached: true,
 				stdio: ['ignore', 'ignore', 'ignore'],
 				env: { ...process.env, __COMPAT_LAYER: 'RunAsInvoker' },
 			});
 		} else if (platform === 'darwin') {
 			// macOS: open the dmg for the user to drag-install
-			spawn('open', [this.downloadedPackagePath], { detached: true, stdio: 'ignore' });
+			spawn('open', [pkgPath], { detached: true, stdio: 'ignore' });
 		} else {
 			// Linux: open the download directory
-			spawn('xdg-open', [path.dirname(this.downloadedPackagePath)], { detached: true, stdio: 'ignore' });
+			spawn('xdg-open', [path.dirname(pkgPath)], { detached: true, stdio: 'ignore' });
 		}
 
 		// Quit the current application
@@ -451,6 +475,129 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 
 	async setInternalOrg(_internalOrg: string | undefined): Promise<void> {
 		// Not applicable
+	}
+
+	// allow-any-unicode-next-line
+	// ── 持久化：下载路径 & 同版本时间戳 ──────────────────────────────────
+
+	private getDownloadedPackageCachePath(): string {
+		return path.join(this.environmentMainService.userDataPath, LAST_DOWNLOADED_PACKAGE_FILE);
+	}
+
+	private getCachedDownloadedPackagePath(): string | undefined {
+		try {
+			const p = this.getDownloadedPackageCachePath();
+			if (!existsSync(p)) return undefined;
+			const raw = require('fs').readFileSync(p, 'utf-8').trim();
+			return raw || undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	private async saveDownloadedPackagePath(pkgPath: string): Promise<void> {
+		try {
+			await writeFile(this.getDownloadedPackageCachePath(), pkgPath, 'utf-8');
+		} catch (err) {
+			this.logService.error('axon-update#saveDownloadedPackagePath - failed', err);
+		}
+	}
+
+	private async clearDownloadedPackagePath(): Promise<void> {
+		try {
+			const p = this.getDownloadedPackageCachePath();
+			if (existsSync(p)) {
+				const fs = require('fs/promises');
+				await fs.unlink(p);
+			}
+		} catch { /* ignore */ }
+	}
+
+	// ── 下载进度标记（识别中断的下载） ──
+
+	private getDownloadingPackageCachePath(): string {
+		return path.join(this.environmentMainService.userDataPath, LAST_DOWNLOADING_PACKAGE_FILE);
+	}
+
+	private getCachedDownloadingPackagePath(): string | undefined {
+		try {
+			const p = this.getDownloadingPackageCachePath();
+			if (!existsSync(p)) return undefined;
+			const raw = require('fs').readFileSync(p, 'utf-8').trim();
+			return raw || undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	private async saveDownloadingPackagePath(pkgPath: string, url: string): Promise<void> {
+		try {
+			await writeFile(this.getDownloadingPackageCachePath(), JSON.stringify({ path: pkgPath, url }), 'utf-8');
+		} catch (err) {
+			this.logService.error('axon-update#saveDownloadingPackagePath - failed', err);
+		}
+	}
+
+	private async clearDownloadingPackagePath(): Promise<void> {
+		try {
+			const p = this.getDownloadingPackageCachePath();
+			if (existsSync(p)) {
+				const fs = require('fs/promises');
+				await fs.unlink(p);
+			}
+		} catch { /* ignore */ }
+	}
+
+	/** 清理上次异常中断的下载残留文件 */
+	private async cleanupInterruptedDownload(): Promise<void> {
+		const progressRaw = this.getCachedDownloadingPackagePath();
+		if (!progressRaw) return;
+
+		let partialPath: string | undefined;
+		try {
+			const parsed = JSON.parse(progressRaw);
+			partialPath = parsed.path;
+		} catch { /* ignore */ }
+
+		// 删除残留的不完整文件
+		if (partialPath && existsSync(partialPath)) {
+			try {
+				const fs = require('fs/promises');
+				await fs.unlink(partialPath);
+				this.logService.info(`axon-update#cleanupInterruptedDownload - removed partial file: ${partialPath}`);
+			} catch (err) {
+				this.logService.error('axon-update#cleanupInterruptedDownload - failed to remove', err);
+			}
+		}
+
+		// 清除进度标记
+		await this.clearDownloadingPackagePath();
+	}
+
+	/** 启动时恢复：如果上次下载的安装包还在磁盘上，直接进入 Ready 状态 */
+	private async tryRecoverDownloadedPackage(): Promise<void> {
+		// 先检查是否有中断的下载（崩溃/异常关机残留）
+		await this.cleanupInterruptedDownload();
+
+		const cachedPath = this.getCachedDownloadedPackagePath();
+		if (!cachedPath) return;
+
+		if (!existsSync(cachedPath)) {
+			// 包已被清理（如用户手动删除），清除残留记录
+			this.logService.info(`axon-update#tryRecover - cached package gone: ${cachedPath}`);
+			await this.clearDownloadedPackagePath();
+			return;
+		}
+
+		this.logService.info(`axon-update#tryRecover - recovered package: ${cachedPath}`);
+		this.downloadedPackagePath = cachedPath;
+		// 构造简易 update 对象供 Ready 状态使用
+		const recoveredUpdate: IUpdate = {
+			version: `recovered-${Date.now()}`,
+			productVersion: this.productService.version,
+			url: cachedPath,
+		};
+		this.setState(State.Ready(recoveredUpdate, false, false));
 	}
 
 	// allow-any-unicode-next-line

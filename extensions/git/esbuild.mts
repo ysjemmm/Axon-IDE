@@ -7,7 +7,7 @@ import * as path from 'node:path';
 import { run } from '../esbuild-extension-common.mts';
 
 const srcDir = path.join(import.meta.dirname, 'src');
-const outDir = path.join(import.meta.dirname, 'dist');
+const outDir = path.join(import.meta.dirname, "out");
 
 async function copyNonTsFiles(outDir: string): Promise<void> {
 	const entries = await fs.readdir(srcDir, { withFileTypes: true, recursive: true });

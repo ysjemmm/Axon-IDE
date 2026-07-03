@@ -68,7 +68,7 @@ export async function showReleaseNotes(accessor: ServicesAccessor, version: stri
 	const fileService = accessor.get(IFileService);
 
 	// 获取安装目录下的 RELEASE_NOTES.md
-	const installPath = environmentService.appRoot;
+	const installPath = URI.file(environmentService.appRoot);
 	const releaseNotesUri = URI.joinPath(installPath, 'RELEASE_NOTES.md');
 
 	try {

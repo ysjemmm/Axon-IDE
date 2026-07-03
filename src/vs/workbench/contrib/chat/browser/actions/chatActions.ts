@@ -905,6 +905,29 @@ export function registerChatActions() {
 		}
 	});
 
+	// Axon: 注册 focusChat 命令 + 快捷键（供空编辑器欢迎页 lookupKeybinding 使用）
+	registerAction2(class AxonFocusChatAction extends Action2 {
+		constructor() {
+			super({
+				id: 'axon.focusChat',
+				title: localize2('axon.focusChat', "Open Axon Chat"),
+				f1: true,
+				keybinding: [
+					{
+						primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyI,
+						weight: KeybindingWeight.WorkbenchContrib,
+					}
+				]
+			});
+		}
+		run(accessor: ServicesAccessor) {
+			const layoutService = accessor.get(IWorkbenchLayoutService);
+			const viewsService = accessor.get(IViewsService);
+			layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
+			viewsService.focusView('workbench.view.chat');
+		}
+	});
+
 	registerAction2(class FocusTodosViewAction extends Action2 {
 		static readonly ID = 'workbench.action.chat.focusTodosView';
 

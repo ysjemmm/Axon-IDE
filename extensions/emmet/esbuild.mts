@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { run } from '../esbuild-extension-common.mts';
 
 const srcDir = path.join(import.meta.dirname, 'src');
-const outDir = path.join(import.meta.dirname, 'dist', 'node');
+const outDir = path.join(import.meta.dirname, "out", 'node');
 
 run({
 	platform: 'node',
