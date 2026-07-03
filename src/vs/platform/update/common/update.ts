@@ -111,6 +111,7 @@ export interface IUpdateService {
 
 	checkForUpdates(explicit: boolean): Promise<void>;
 	downloadUpdate(explicit: boolean): Promise<void>;
+	cancelDownload(): void;
 	applyUpdate(): Promise<void>;
 	quitAndInstall(): Promise<void>;
 

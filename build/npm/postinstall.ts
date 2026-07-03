@@ -375,6 +375,25 @@ async function main() {
 			}
 		}
 	}
+
+	// Fix: @xterm/addon-ligatures beta (0.11.0-beta.220) only ships ESM (.mjs),
+	// but the AMD loader (amdX.ts) needs UMD (.js). Use esbuild to convert.
+	const ligaturesMjs = path.join(root, 'node_modules', '@xterm', 'addon-ligatures', 'lib', 'addon-ligatures.mjs');
+	const ligaturesJs = path.join(root, 'node_modules', '@xterm', 'addon-ligatures', 'lib', 'addon-ligatures.js');
+	if (fs.existsSync(ligaturesMjs) && !fs.existsSync(ligaturesJs)) {
+		log('.', 'Generating addon-ligatures.js (UMD) from .mjs...');
+		const tmpJs = ligaturesJs + '.tmp';
+		child_process.spawnSync(path.join(root, 'node_modules', '.bin', 'esbuild'), [
+			ligaturesMjs, '--format=iife', '--global-name=__LigaturesAddonTmp', '--outfile=' + tmpJs,
+		], { cwd: root, shell: process.platform === 'win32' });
+		if (fs.existsSync(tmpJs)) {
+			const content = fs.readFileSync(tmpJs, 'utf8');
+			const footer = "\n;if(typeof define==='function'&&define.amd){define(['exports'],function(e){e.LigaturesAddon=__LigaturesAddonTmp.LigaturesAddon;});}\n";
+			fs.writeFileSync(ligaturesJs, content + footer, 'utf8');
+			fs.unlinkSync(tmpJs);
+			log('.', 'Generated addon-ligatures.js (UMD)');
+		}
+	}
 }
 
 main().catch(err => {

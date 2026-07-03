@@ -310,6 +310,11 @@ export abstract class AbstractUpdateService implements IUpdateService {
 		await this.doDownloadUpdate(this.state);
 	}
 
+	cancelDownload(): void {
+		this.logService.trace('update#cancelDownload, state = ', this.state.type);
+		// Default implementation: no-op. Subclasses can override to support cancellation.
+	}
+
 	protected async doDownloadUpdate(state: AvailableForDownload): Promise<void> {
 		// noop
 	}

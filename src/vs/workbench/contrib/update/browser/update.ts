@@ -24,6 +24,8 @@ import { MenuRegistry, MenuId, registerAction2, Action2 } from '../../../../plat
 import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
+import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
 import { IUserDataSyncEnablementService, IUserDataSyncService, IUserDataSyncStoreManagementService, SyncStatus, UserDataSyncStoreType } from '../../../../platform/userDataSync/common/userDataSync.js';
 import { IsWebContext } from '../../../../platform/contextkey/common/contextkeys.js';
 import { Promises, Throttler } from '../../../../base/common/async.js';
@@ -58,16 +60,39 @@ async function openLatestReleaseNotesInBrowser(accessor: ServicesAccessor) {
 	}
 }
 
-async function showReleaseNotes(accessor: ServicesAccessor, version: string) {
+export async function showReleaseNotes(accessor: ServicesAccessor, version: string) {
+	// Axon: 在编辑器内打开本地 RELEASE_NOTES.md
 	const instantiationService = accessor.get(IInstantiationService);
+	const environmentService = accessor.get(IBrowserWorkbenchEnvironmentService);
+	const editorService = accessor.get(IEditorService);
+	const fileService = accessor.get(IFileService);
+
+	// 获取安装目录下的 RELEASE_NOTES.md
+	const installPath = environmentService.appRoot;
+	const releaseNotesUri = URI.joinPath(installPath, 'RELEASE_NOTES.md');
+
 	try {
-		await showReleaseNotesInEditor(instantiationService, version, false);
-	} catch (err) {
-		try {
-			await instantiationService.invokeFunction(openLatestReleaseNotesInBrowser);
-		} catch (err2) {
-			throw new Error(`${err.message} and ${err2.message}`);
+		// 检查文件是否存在
+		const exists = await fileService.exists(releaseNotesUri);
+		if (exists) {
+			await editorService.openEditor({
+				resource: releaseNotesUri,
+				options: {
+					preserveFocus: false,
+					pinned: false
+				}
+			});
+			return;
 		}
+	} catch (err) {
+		// 文件不存在或打开失败，fallback 到浏览器
+	}
+
+	// fallback：打开浏览器跳转到 GitHub Releases
+	const productService = accessor.get(IProductService);
+	if (productService.releaseNotesUrl) {
+		const openerService = accessor.get(IOpenerService);
+		await openerService.open(URI.parse(productService.releaseNotesUrl));
 	}
 }
 
@@ -287,6 +312,7 @@ export class UpdateContribution extends Disposable implements IWorkbenchContribu
 		CommandsRegistry.registerCommand('update.checking', () => { });
 		CommandsRegistry.registerCommand('update.downloadNow', () => this.updateService.downloadUpdate(true));
 		CommandsRegistry.registerCommand('update.downloading', () => { });
+		CommandsRegistry.registerCommand('update.cancelDownload', () => this.updateService.cancelDownload());
 		CommandsRegistry.registerCommand('update.install', () => this.updateService.applyUpdate());
 		CommandsRegistry.registerCommand('update.updating', () => { });
 		CommandsRegistry.registerCommand('update.restart', () => this.updateService.quitAndInstall());

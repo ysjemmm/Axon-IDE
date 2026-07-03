@@ -90,6 +90,11 @@ abstract class AbstractUpdateService implements IUpdateService {
 		await this.doDownloadUpdate(this.state);
 	}
 
+	cancelDownload(): void {
+		this.logService.trace('update#cancelDownload, state = ', this.state.type);
+		// no-op for snap
+	}
+
 	protected doDownloadUpdate(state: AvailableForDownload): Promise<void> {
 		return Promise.resolve(undefined);
 	}

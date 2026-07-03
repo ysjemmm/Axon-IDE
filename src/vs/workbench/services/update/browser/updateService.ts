@@ -86,6 +86,10 @@ export class BrowserUpdateService extends Disposable implements IUpdateService {
 		// no-op
 	}
 
+	cancelDownload(): void {
+		// no-op - not applicable in browser
+	}
+
 	async applyUpdate(): Promise<void> {
 		this.hostService.reload();
 	}

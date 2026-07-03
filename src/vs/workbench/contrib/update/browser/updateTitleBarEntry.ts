@@ -291,6 +291,9 @@ export class UpdateTitleBarEntry extends BaseActionViewItem {
 			case StateType.AvailableForDownload:
 				commandId = 'update.downloadNow';
 				break;
+			case StateType.Downloading:
+				commandId = 'update.cancelDownload';
+				break;
 			case StateType.Downloaded:
 				commandId = 'update.install';
 				break;
@@ -311,11 +314,15 @@ export class UpdateTitleBarEntry extends BaseActionViewItem {
 			return;
 		}
 
-		dom.clearNode(this.content);
 		this.content.classList.remove('prominent', 'progress-indefinite', 'progress-percent', 'update-disabled');
 		this.content.style.removeProperty('--update-progress');
 
-		const label = dom.append(this.content, dom.$('.indicator-label'));
+		// 复用或创建 label，避免每次 clearNode 导致闪烁
+		let label = this.content.querySelector('.indicator-label') as HTMLElement | null;
+		if (!label) {
+			label = dom.append(this.content, dom.$('.indicator-label'));
+		}
+
 		switch (state.type) {
 			case StateType.Disabled:
 				label.textContent = localize('updateIndicator.update', "Update");
@@ -339,10 +346,16 @@ export class UpdateTitleBarEntry extends BaseActionViewItem {
 				this.content.classList.add('prominent');
 				break;
 
-			case StateType.Downloading:
-				label.textContent = localize('updateIndicator.downloading', "Downloading...");
-				this.renderProgressState(this.content, computeProgressPercent(state.downloadedBytes, state.totalBytes));
+			case StateType.Downloading: {
+				const percent = computeProgressPercent(state.downloadedBytes, state.totalBytes);
+				if (percent !== undefined && percent > 0) {
+					label.textContent = localize('updateIndicator.downloadingWithPercent', "Downloading... {0}%", percent);
+				} else {
+					label.textContent = localize('updateIndicator.downloading', "Downloading...");
+				}
+				this.renderProgressState(this.content, percent);
 				break;
+			}
 
 			case StateType.Updating:
 				label.textContent = localize('updateIndicator.installing', "Installing...");

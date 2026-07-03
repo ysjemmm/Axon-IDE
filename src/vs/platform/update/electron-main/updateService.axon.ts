@@ -16,7 +16,7 @@ import { tmpdir } from 'os';
 import * as path from '../../../base/common/path.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
-import { CancellationToken } from '../../../base/common/cancellation.js';
+import { CancellationToken, CancellationTokenSource } from '../../../base/common/cancellation.js';
 import { VSBuffer } from '../../../base/common/buffer.js';
 import { transform } from '../../../base/common/stream.js';
 import { URI } from '../../../base/common/uri.js';
@@ -146,6 +146,8 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 	private lastFetchedPublishedAt: string | undefined;
 	/** checkForUpdates 发现新版本后缓存的 update + asset，供 downloadUpdate 使用 */
 	private pendingUpdate: { update: IUpdate; asset: IGitHubAsset } | undefined;
+	/** 下载任务的 CancellationTokenSource，用于支持取消下载 */
+	private downloadCancellationTokenSource: CancellationTokenSource | undefined;
 
 	constructor(
 		@ILifecycleMainService private readonly lifecycleMainService: ILifecycleMainService,
@@ -316,6 +318,10 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 		this.logService.info(`axon-update#doDownload - START url=${update.url} target=${downloadPath} size=${totalBytes}`);
 		this.setState(State.Downloading(update, explicit, false, 0, totalBytes, startTime));
 
+		// 创建 CancellationToken 用于支持取消下载
+		this.downloadCancellationTokenSource = new CancellationTokenSource();
+		const token = this.downloadCancellationTokenSource.token;
+
 		try {
 			const context = await this.requestService.request(
 				{
@@ -323,7 +329,7 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 					headers: { 'User-Agent': `AxonIDE/${this.productService.version}` },
 					callSite: 'axonUpdateService.download',
 				},
-				CancellationToken.None,
+				token,
 			);
 
 			let downloadedBytes = 0;
@@ -331,6 +337,10 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 				context.stream,
 				{
 					data: data => {
+						// 检查是否已取消
+						if (token.isCancellationRequested) {
+							throw new Error('Download cancelled');
+						}
 						downloadedBytes += data.byteLength;
 						this.setState(State.Downloading(update, explicit, false, downloadedBytes, totalBytes, startTime));
 						return data;
@@ -352,8 +362,22 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 
 			this.logService.info(`axon-update#doDownload - complete: ${downloadPath}`);
 		} catch (err) {
-			this.logService.error('axon-update#doDownload - failed', err);
-			this.setState(State.Idle(UpdateType.Setup, explicit ? 'Download failed' : undefined));
+			if (token.isCancellationRequested) {
+				this.logService.info('axon-update#doDownload - cancelled by user');
+				this.setState(State.Idle(UpdateType.Setup));
+			} else {
+				this.logService.error('axon-update#doDownload - failed', err);
+				this.setState(State.Idle(UpdateType.Setup, explicit ? 'Download failed' : undefined));
+			}
+		} finally {
+			this.downloadCancellationTokenSource = undefined;
+		}
+	}
+
+	cancelDownload(): void {
+		if (this.downloadCancellationTokenSource) {
+			this.logService.info('axon-update#cancelDownload - cancelling download');
+			this.downloadCancellationTokenSource.cancel();
 		}
 	}
 
