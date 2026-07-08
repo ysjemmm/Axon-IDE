@@ -228,7 +228,11 @@ export class LanguageDetectionWorker implements ILanguageDetectionWorker {
 		try {
 			modelOperations = await this.getModelOperations();
 		} catch (e) {
-			console.log(e);
+			// `require is not defined` 是已知问题：worker 环境缺少 Node.js CJS 支持，
+			// 导致 @vscode/vscode-languagedetection 加载失败。不影响功能——语言检测会 fallback 到正则模型。
+			if (!(e instanceof ReferenceError && e.message?.includes?.('require'))) {
+				console.warn('[languageDetection] 模型加载失败（已降级）:', e);
+			}
 			this._loadFailed = true;
 			return;
 		}
