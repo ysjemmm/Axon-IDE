@@ -203,6 +203,9 @@ import './services/accounts/browser/defaultAccount.js';
 // Account Policy Gate
 import './services/policies/browser/accountPolicyGate.contribution.js';
 
+// Axon
+import './contrib/axonModal/browser/axonAccountUsageModal.contribution.js';
+
 // Telemetry
 import './contrib/telemetry/browser/telemetry.contribution.js';
 
