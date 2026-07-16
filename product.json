@@ -45,7 +45,8 @@
 		"chat.titleBar.openInAgentsWindow.enabled": false,
 		"chat.commandCenter.enabled": false,
 		"explorer.compactFolders": false,
-		"git.mergeEditor": true
+		"git.mergeEditor": true,
+		"diffEditor.hideUnchangedRegions.enabled": false
 	},
 	"onboardingKeymaps": [
 		{
