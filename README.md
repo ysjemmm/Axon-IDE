@@ -31,6 +31,7 @@ Agent 能看到你的终端报错、诊断变化，主动感知问题。浏览�
 -->
 
 <p align="center">
+	<img width="1027" height="1110" alt="6718842d4d0f615f1d22b7d992bb8184" src="https://github.com/user-attachments/assets/f17d8dba-0bb3-4100-b1b6-a3a40a8183ad" />
   <img width="1070" height="1299" alt="image" src="https://github.com/user-attachments/assets/9bc6a736-32ac-44f7-808f-fcc96229abc1" />
   <img width="2549" height="1378" alt="image" src="https://github.com/user-attachments/assets/2629d828-16bc-44b7-a993-3ed4dfb7f79a" />
 </p>
