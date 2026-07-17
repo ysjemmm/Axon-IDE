@@ -184,6 +184,57 @@ export class WebviewViewPane extends ViewPane {
 			}));
 		}
 
+		// Axon: 允许 Explorer 拖入文件到 axon.chat webview。
+		// iframe 会吞掉落在其上的 drop 事件，所以在 window 层用捕获阶段监听，
+		// 通过几何落点判断是否落在 Axon view 区域内，命中则解析文件 URI 转发给前端。
+		if (this.id === 'axon.chat') {
+			const targetWindow = getWindow(this.element);
+			const isInsideAxonView = (e: DragEvent): boolean => {
+				const rect = this._container?.getBoundingClientRect();
+				if (!rect) { return false; }
+				return e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+			};
+			const setIframePointerEvents = (val: string) => {
+				const iframe = this._webview.value?.container?.querySelector('iframe');
+				if (iframe) { (iframe as HTMLElement).style.pointerEvents = val; }
+			};
+			this._webviewDisposables.add(addDisposableListener(targetWindow, EventType.DRAG_OVER, (e: DragEvent) => {
+				if (!isInsideAxonView(e)) {
+					return;
+				}
+				if (e.dataTransfer && (e.dataTransfer.types.includes('ResourceURLs') || e.dataTransfer.types.includes('text/uri-list'))) {
+					// 拖文件经过 Axon view 时禁用 iframe pointer-events，让 window 层能收到 drop
+					setIframePointerEvents('none');
+					e.preventDefault();
+					e.dataTransfer.dropEffect = 'copy';
+				}
+			}, true));
+			this._webviewDisposables.add(addDisposableListener(targetWindow, EventType.DRAG_END, () => setIframePointerEvents('')));
+			this._webviewDisposables.add(addDisposableListener(targetWindow, EventType.DROP, (e: DragEvent) => {
+				if (!isInsideAxonView(e)) { return; }
+				const dt = e.dataTransfer;
+				if (!dt) { return; }
+				const resourcesRaw = dt.getData('ResourceURLs');
+				let uris: string[] = [];
+				if (resourcesRaw) {
+					try { uris = JSON.parse(resourcesRaw); } catch { /* ignore */ }
+				}
+				if (uris.length === 0) {
+					const uriList = dt.getData('text/uri-list');
+					if (uriList) {
+						uris = uriList.split(/\r?\n/).filter(s => s && !s.startsWith('#'));
+					}
+				}
+				console.log(`[Axon] explorer drop: ${uris.length} uris`, uris);
+				setIframePointerEvents('');
+				if (uris.length > 0) {
+					e.preventDefault();
+					e.stopImmediatePropagation();
+					webview.postMessage({ type: 'explorer_drop', uris });
+				}
+			}, true));
+		}
+
 		this._webviewDisposables.add(new WebviewWindowDragMonitor(getWindow(this.element), () => this._webview.value));
 
 		const source = this._webviewDisposables.add(new CancellationTokenSource());

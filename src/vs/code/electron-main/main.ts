@@ -330,96 +330,16 @@ class CodeMain {
 				throw error;
 			}
 
-			// there's a running instance, let's connect to it
-			let client: NodeIPCClient<string>;
+			// Axon: 允许多实例——用带时间戳的唯一 IPC handle 独立启动，
+			// 而不是连接第一个实例做参数转发后退出。
+			const uniqueHandle = `${environmentMainService.mainIPCHandle}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+			logService.info(`[Axon] Another instance detected, starting independently with unique IPC handle`);
 			try {
-				client = await nodeIPCConnect(environmentMainService.mainIPCHandle, 'main');
-			} catch (error) {
-
-				// Handle unexpected connection errors by showing a dialog to the user
-				if (!retry || isWindows || error.code !== 'ECONNREFUSED') {
-					if (error.code === 'EPERM') {
-						this.showStartupWarningDialog(
-							localize('secondInstanceAdmin', "Another instance of {0} is already running as administrator.", productService.nameShort),
-							localize('secondInstanceAdminDetail', "Please close the other instance and try again."),
-							productService
-						);
-					}
-
-					throw error;
-				}
-
-				// it happens on Linux and OS X that the pipe is left behind
-				// let's delete it, since we can't connect to it and then
-				// retry the whole thing
-				try {
-					unlinkSync(environmentMainService.mainIPCHandle);
-				} catch (error) {
-					logService.warn('Could not delete obsolete instance handle', error);
-
-					throw error;
-				}
-
-				return this.claimInstance(logService, environmentMainService, lifecycleMainService, instantiationService, productService, false);
+				mainProcessNodeIpcServer = await nodeIPCServe(uniqueHandle);
+				Event.once(lifecycleMainService.onWillShutdown)(() => mainProcessNodeIpcServer.dispose());
+			} catch (retryError) {
+				throw retryError;
 			}
-
-			// Tests from CLI require to be the only instance currently
-			if (environmentMainService.extensionTestsLocationURI && !environmentMainService.debugExtensionHost.break) {
-				const msg = `Running extension tests from the command line is currently only supported if no other instance of ${productService.nameShort} is running.`;
-				logService.error(msg);
-				client.dispose();
-
-				throw new Error(msg);
-			}
-
-			// Show a warning dialog after some timeout if it takes long to talk to the other instance
-			// Skip this if we are running with --wait where it is expected that we wait for a while.
-			// Also skip when gathering diagnostics (--status) which can take a longer time.
-			let startupWarningDialogHandle: Timeout | undefined = undefined;
-			if (!environmentMainService.args.wait && !environmentMainService.args.status) {
-				startupWarningDialogHandle = setTimeout(() => {
-					this.showStartupWarningDialog(
-						localize('secondInstanceNoResponse', "Another instance of {0} is running but not responding", productService.nameShort),
-						localize('secondInstanceNoResponseDetail', "Please close all other instances and try again."),
-						productService
-					);
-				}, 10000);
-			}
-
-			const otherInstanceLaunchMainService = ProxyChannel.toService<ILaunchMainService>(client.getChannel('launch'), { disableMarshalling: true });
-			const otherInstanceDiagnosticsMainService = ProxyChannel.toService<IDiagnosticsMainService>(client.getChannel('diagnostics'), { disableMarshalling: true });
-
-			// Process Info
-			if (environmentMainService.args.status) {
-				return instantiationService.invokeFunction(async () => {
-					const diagnosticsService = new DiagnosticsService(NullTelemetryService, productService);
-					const mainDiagnostics = await otherInstanceDiagnosticsMainService.getMainDiagnostics();
-					const remoteDiagnostics = await otherInstanceDiagnosticsMainService.getRemoteDiagnostics({ includeProcesses: true, includeWorkspaceMetadata: true });
-					const diagnostics = await diagnosticsService.getDiagnostics(mainDiagnostics, remoteDiagnostics);
-					console.log(diagnostics);
-
-					throw new ExpectedError();
-				});
-			}
-
-			// Windows: allow to set foreground
-			if (isWindows) {
-				await this.windowsAllowSetForegroundWindow(otherInstanceLaunchMainService, logService);
-			}
-
-			// Send environment over...
-			logService.trace('Sending env to running instance...');
-			await otherInstanceLaunchMainService.start(environmentMainService.args, process.env as IProcessEnvironment);
-
-			// Cleanup
-			client.dispose();
-
-			// Now that we started, make sure the warning dialog is prevented
-			if (startupWarningDialogHandle) {
-				clearTimeout(startupWarningDialogHandle);
-			}
-
-			throw new ExpectedError('Sent env to running instance. Terminating...');
 		}
 
 		// Print --status usage info
