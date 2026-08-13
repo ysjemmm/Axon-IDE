@@ -223,15 +223,18 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 			}
 
 			if (compareVersions(latestVersion, currentVersion) === 0) {
-				// Same version — check if release is newer than what was last installed
-				const lastTs = this.getLastUpdateTimestamp();
-				this.logService.info(`axon-update#checkForUpdates - same version, lastTs=${lastTs} publishedTs=${new Date(release.published_at).getTime()}`);
-				if (lastTs && new Date(release.published_at).getTime() <= lastTs) {
-					this.logService.info('axon-update#checkForUpdates - same version, no newer release');
-					this.setState(State.Idle(UpdateType.Setup, undefined, explicit || undefined));
-					return;
-				}
-				this.logService.info('axon-update#checkForUpdates - same version but release is newer, offering update');
+				// 版本号相同 = 已经是最新版本，直接判定无需更新。
+				//
+				// 不再用 published_at 时间戳做"同版本增量更新"判断——那套机制有两个坑：
+				// 1. 时间戳在【下载完成】时就写入（doDownload），而非【安装完成】后；用户下载后
+				//    未安装/安装失败也会留下时间戳，语义错位。
+				// 2. 时间戳文件存在 userDataPath 下，升级安装后若 userDataPath 变化（如安装到
+				//    不同盘符）文件就"丢失"，getLastUpdateTimestamp() 返回 undefined，同版本也
+				//    会被误判为"有新版本"→ 升级完成后打开依旧提示升级。
+				// 版本号相同即已最新，与 isLatestVersion() 的 `<= 0` 判定保持一致。
+				this.logService.info(`axon-update#checkForUpdates - same version (${currentVersion}), already latest`);
+				this.setState(State.Idle(UpdateType.Setup, undefined, explicit || undefined));
+				return;
 			} else {
 				this.logService.info(`axon-update#checkForUpdates - update available: ${currentVersion} -> ${latestVersion}`);
 			}
