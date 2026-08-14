@@ -1,3 +1,5 @@
+
+
 <div align="center">
 
 <img src="extensions/axon-ide/media/icon.png" alt="Axon IDE" width="128" />
@@ -104,7 +106,7 @@ cd Axon && pnpm install && pnpm build
 
 # 编译扩展 + 前端
 cd extensions/axon-ide && node esbuild.mjs
-cd ../../web && npx vite build
+cd ../Axon/web && npx vite build
 
 # 运行（F5 启动调试）
 cd ../.. && npm run watch
