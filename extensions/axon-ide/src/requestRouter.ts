@@ -11,13 +11,15 @@ import * as vscode from "vscode";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { RelayStore, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, supportsThinking, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry } from "@axon/core";
+import { RelayStore, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, supportsThinking, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry, type ProviderQuotaConfig } from "@axon/core";
 import { createVSCodeAgentHost } from "@axon/host-vscode";
+import { queryProviderQuota, quotaTokenStore, validateQuotaQuery } from "./quotaService.js";
 
 const execFileAsync = promisify(execFile);
 
 export interface RouterDeps {
   storage: SessionStorage;
+  secrets: vscode.SecretStorage;
   isValidDir: (p: string) => Promise<boolean>;
   browse: (path?: string) => Promise<unknown>;
   defaultWorkspace: string;
@@ -557,6 +559,23 @@ export class RequestRouter {
         workspace: ws ? await readProviderConfig("workspace", ws) : { providers: {}, builtinApiKeys: {} },
       };
     }
+    // 识图兜底模型：读（workspace 优先，回退 user）与写（指定 level）
+    if (path === "/api/providers/vision-fallback" && method === "GET") {
+      const ws = query.get("workspace") || undefined;
+      const userCfg = await readProviderConfig("user");
+      const wsCfg = ws ? await readProviderConfig("workspace", ws) : {};
+      return { model: wsCfg.visionFallbackModel || userCfg.visionFallbackModel || null };
+    }
+    if (path === "/api/providers/vision-fallback" && method === "PUT") {
+      const { model, level, workspace } = (body || {}) as { model?: string | null; level?: "user" | "workspace"; workspace?: string };
+      const lv = level === "workspace" ? "workspace" : "user";
+      const config = await readProviderConfig(lv, workspace);
+      if (model) config.visionFallbackModel = model;
+      else delete config.visionFallbackModel;
+      await writeProviderConfig(lv, config, workspace);
+      await resolveProviders(workspace || d.defaultWorkspace);
+      return { ok: true };
+    }
     const providerLevelMatch = path.match(/^\/api\/providers\/(user|workspace)$/);
     if (providerLevelMatch && method === "PUT") {
       const level = providerLevelMatch[1] as "user" | "workspace";
@@ -613,6 +632,57 @@ export class RequestRouter {
         key = (entry.apiKey || "").trim();
       }
       return { models: await probeProviderModels(url, key) };
+    }
+    const providerQuotaMatch = path.match(/^\/api\/providers\/(user|workspace)\/([^/]+)\/quota$/);
+    if (providerQuotaMatch && method === "PUT") {
+      const level = providerQuotaMatch[1] as "user" | "workspace";
+      const name = decodeURIComponent(providerQuotaMatch[2]);
+      const quota = (body as { quota?: ProviderQuotaConfig | null } | undefined)?.quota;
+      const config = await readProviderConfig(level, query.get("workspace") || d.defaultWorkspace);
+      if (quota) validateQuotaQuery(quota);
+      if (RESERVED_PROVIDER_NAMES.includes(name)) {
+        config.builtinQuota = config.builtinQuota || {};
+        if (quota) config.builtinQuota[name] = quota;
+        else delete config.builtinQuota[name];
+      } else {
+        const entry = config.providers?.[name];
+        if (!entry) throw new Error(`provider 不存在：${name}`);
+        if (quota) entry.quota = quota;
+        else delete entry.quota;
+      }
+      await writeProviderConfig(level, config, query.get("workspace") || d.defaultWorkspace);
+      return { ok: true };
+    }
+    const providerQuotaTestMatch = path.match(/^\/api\/providers\/([^/]+)\/quota\/test$/);
+    if (providerQuotaTestMatch && method === "POST") {
+      const name = decodeURIComponent(providerQuotaTestMatch[1]);
+      const ws = query.get("workspace") || d.defaultWorkspace;
+      const resolved = await resolveProviders(ws);
+      const provider = resolved.find((item) => item.name === name);
+      if (!provider) throw new Error(`provider 不存在：${name}`);
+      const quota = (body as { quota?: ProviderQuotaConfig } | undefined)?.quota;
+      if (!quota) throw new Error("额度查询规则不能为空");
+      return queryProviderQuota(provider, quota, quotaTokenStore(d.secrets, name));
+    }
+    const providerQuotaTokensMatch = path.match(/^\/api\/providers\/([^/]+)\/quota\/tokens$/);
+    if (providerQuotaTokensMatch && method === "GET") {
+      const name = decodeURIComponent(providerQuotaTokensMatch[1]);
+      const store = quotaTokenStore(d.secrets, name);
+      const [accessToken, refreshToken, cookie] = await Promise.all([
+        store.getAccessToken(),
+        store.getRefreshToken(),
+        store.getCookie(),
+      ]);
+      return { hasAccessToken: !!accessToken?.value, hasRefreshToken: !!refreshToken, hasCookie: !!cookie };
+    }
+    if (providerQuotaTokensMatch && method === "PUT") {
+      const name = decodeURIComponent(providerQuotaTokensMatch[1]);
+      const tokens = (body || {}) as { accessToken?: string; refreshToken?: string; cookie?: string };
+      const store = quotaTokenStore(d.secrets, name);
+      if (tokens.accessToken?.trim()) await store.setAccessToken(tokens.accessToken.trim(), undefined);
+      if (tokens.refreshToken?.trim()) await store.setRefreshToken(tokens.refreshToken.trim());
+      if (tokens.cookie?.trim()) await store.setCookie(tokens.cookie.trim());
+      return { ok: true };
     }
     const providerKeyMatch = path.match(/^\/api\/providers\/(user|workspace)\/builtin-key$/);
     if (providerKeyMatch && method === "PUT") {
@@ -725,9 +795,16 @@ async function readProviderConfig(level: "user" | "workspace", workspace?: strin
   const { readFile } = await import("node:fs/promises");
   try {
     const parsed = JSON.parse(await readFile(providerConfigPath(level, workspace), "utf-8")) as ProviderConfigFile;
-    return { providers: parsed.providers || {}, builtinApiKeys: parsed.builtinApiKeys || {}, builtinBaseUrls: parsed.builtinBaseUrls || {} };
+    return {
+      providers: parsed.providers || {},
+      builtinApiKeys: parsed.builtinApiKeys || {},
+      builtinBaseUrls: parsed.builtinBaseUrls || {},
+      builtinModels: parsed.builtinModels || {},
+      builtinQuota: parsed.builtinQuota || {},
+      ...(parsed.visionFallbackModel ? { visionFallbackModel: parsed.visionFallbackModel } : {}),
+    };
   } catch {
-    return { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {} };
+    return { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {}, builtinQuota: {} };
   }
 }
 
@@ -735,7 +812,14 @@ async function readProviderConfig(level: "user" | "workspace", workspace?: strin
 async function writeProviderConfig(level: "user" | "workspace", config: ProviderConfigFile, workspace?: string): Promise<void> {
   const { mkdir, writeFile } = await import("node:fs/promises");
   const { dirname } = await import("node:path");
-  const normalized: ProviderConfigFile = { providers: config.providers || {}, builtinApiKeys: config.builtinApiKeys || {}, builtinBaseUrls: config.builtinBaseUrls || {} };
+  const normalized: ProviderConfigFile = {
+    providers: config.providers || {},
+    builtinApiKeys: config.builtinApiKeys || {},
+    builtinBaseUrls: config.builtinBaseUrls || {},
+    builtinModels: config.builtinModels || {},
+    builtinQuota: config.builtinQuota || {},
+    ...(config.visionFallbackModel ? { visionFallbackModel: config.visionFallbackModel } : {}),
+  };
   const p = providerConfigPath(level, workspace);
   await mkdir(dirname(p), { recursive: true });
   await writeFile(p, JSON.stringify(normalized, null, 2), "utf-8");
