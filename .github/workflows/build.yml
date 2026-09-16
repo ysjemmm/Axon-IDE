@@ -198,6 +198,24 @@ jobs:
               failed+=("$ext")
             fi
           done
+          # 除上面的 esbuild 关键扩展外，再扫描所有把类型查找限定在本地 node_modules/@types
+          # 的扩展（tsconfig 的 typeRoots 指向 ./node_modules/@types，上游写法，共 30 个）。
+          # 这类扩展一旦被 postinstall 并发安装漏掉，tsgo 会直接报
+          # TS2688「Cannot find type definition file for 'node'」；而 esbuild 仍能从仓库
+          # 根目录解析到运行时依赖，所以打包阶段一切正常，问题只在 gulp 的 typecheck 才炸。
+          # php-language-features 就是这样在 Windows 上整条构建失败的。
+          for tsconfig in $(grep -rl 'node_modules/@types' extensions/*/tsconfig.json 2>/dev/null || true); do
+            ext="$(dirname "$tsconfig")"
+            case " ${failed[*]} " in *" $ext "*) continue ;; esac
+            if [ ! -d "$ext/node_modules/@types" ]; then
+              echo "::warning::Missing $ext/node_modules/@types (required by its tsconfig typeRoots)"
+              failed+=("$ext")
+            elif grep -q '"node"' "$tsconfig" && [ ! -d "$ext/node_modules/@types/node" ]; then
+              # 整个 @types 在、但 @types/node 单独缺失（两者报的错完全一样），一并覆盖
+              echo "::warning::Missing $ext/node_modules/@types/node (declared in its tsconfig types)"
+              failed+=("$ext")
+            fi
+          done
           if [ ${#failed[@]} -gt 0 ]; then
             echo "::notice::Retrying npm install for ${#failed[@]} extension(s) that postinstall missed..."
             for ext in "${failed[@]}"; do
@@ -406,6 +424,20 @@ jobs:
           for ext in "${critical_exts[@]}"; do
             if [ ! -d "$ext/node_modules" ] || [ -z "$(ls -A "$ext/node_modules" 2>/dev/null)" ]; then
               echo "::warning::Missing node_modules for $ext"
+              failed+=("$ext")
+            fi
+          done
+          # 同 Windows：补齐所有把类型查找限定在本地 node_modules/@types 的扩展，
+          # 避免 postinstall 漏装导致 tsgo 报 TS2688（详见 Windows 任务里的同段注释）。
+          for tsconfig in $(grep -rl 'node_modules/@types' extensions/*/tsconfig.json 2>/dev/null || true); do
+            ext="$(dirname "$tsconfig")"
+            case " ${failed[*]} " in *" $ext "*) continue ;; esac
+            if [ ! -d "$ext/node_modules/@types" ]; then
+              echo "::warning::Missing $ext/node_modules/@types (required by its tsconfig typeRoots)"
+              failed+=("$ext")
+            elif grep -q '"node"' "$tsconfig" && [ ! -d "$ext/node_modules/@types/node" ]; then
+              # 整个 @types 在、但 @types/node 单独缺失（两者报的错完全一样），一并覆盖
+              echo "::warning::Missing $ext/node_modules/@types/node (declared in its tsconfig types)"
               failed+=("$ext")
             fi
           done
