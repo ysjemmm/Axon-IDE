@@ -30,6 +30,9 @@ export interface IAgentsBannerResult {
 	readonly disposables: DisposableStore;
 }
 
+/** Axon: never point users at Copilot's Agents window, so the banner is off. The original logic below is kept to stay close to upstream. */
+const AXON_AGENTS_BANNER_ENABLED: boolean = false;
+
 /**
  * Returns whether the agents banner can be shown.
  * The banner requires the open agents window command
@@ -37,7 +40,9 @@ export interface IAgentsBannerResult {
  * It is also hidden when AI features are disabled.
  */
 export function canShowAgentsBanner(chatEntitlementService: IChatEntitlementService): boolean {
-	return false;
+	if (!AXON_AGENTS_BANNER_ENABLED) {
+		return false;
+	}
 	const sentiment = chatEntitlementService.sentiment;
 	if (sentiment.hidden || sentiment.disabled) {
 		return false;

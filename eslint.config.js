@@ -11,7 +11,9 @@ import tseslint from 'typescript-eslint';
 
 import stylisticTs from '@stylistic/eslint-plugin-ts';
 import * as pluginLocal from './.eslint-plugin-local/index.ts';
-import * as pluginCopilotLocal from './extensions/copilot/.eslintplugin/index.ts';
+// Axon: extensions/copilot (and its .eslintplugin) was removed in 1ba0099a, so the
+// `copilot-local` plugin and its rules are gone too. The remaining extensions/copilot/**
+// globs below match nothing and are harmless.
 import pluginImport from 'eslint-plugin-import';
 import pluginJsdoc from 'eslint-plugin-jsdoc';
 
@@ -2465,7 +2467,6 @@ export default defineConfig(
 		},
 		plugins: {
 			'import': pluginImport,
-			'copilot-local': pluginCopilotLocal,
 		},
 		rules: {
 			'local/code-no-dangerous-type-assertions': 'off',
@@ -2568,28 +2569,6 @@ export default defineConfig(
 					]
 				}
 			],
-			'copilot-local/no-instanceof-uri': ['warn'],
-			'copilot-local/no-test-imports': ['warn'],
-			'copilot-local/no-runtime-import': [
-				'warn',
-				{
-					test: ['vscode'],
-					'src/**/common/**/*': ['vscode'],
-					'src/**/node/**/*': ['vscode']
-				}
-			],
-			'copilot-local/no-funny-filename': ['warn'],
-			'copilot-local/no-bad-gdpr-comment': ['warn'],
-			'copilot-local/no-gdpr-event-name-mismatch': ['warn'],
-			'copilot-local/no-unlayered-files': ['warn'],
-			'copilot-local/no-restricted-copilot-pr-string': [
-				'warn',
-				{
-					className: 'GitHubPullRequestProviders',
-					string: 'Generate with Copilot'
-				}
-			],
-			'copilot-local/no-nls-localize': ['warn'],
 		}
 	},
 	// copilot extension - allow node imports in node layer
@@ -2612,33 +2591,7 @@ export default defineConfig(
 			'extensions/copilot/build/**',
 		],
 		rules: {
-			'copilot-local/no-unlayered-files': 'off',
 			'no-restricted-imports': 'off'
-		}
-	},
-	// copilot extension - TSX linebreak rule
-	{
-		files: [
-			'extensions/copilot/src/extension/**/*.tsx',
-		],
-		plugins: {
-			'copilot-local': pluginCopilotLocal,
-		},
-		rules: {
-			'copilot-local/no-missing-linebreak': 'warn'
-		}
-	},
-	// copilot extension - test-only rule
-	{
-		files: [
-			'extensions/copilot/**/*.test.ts',
-			'extensions/copilot/**/*.test.tsx',
-		],
-		plugins: {
-			'copilot-local': pluginCopilotLocal,
-		},
-		rules: {
-			'copilot-local/no-test-only': 'warn'
 		}
 	},
 	// copilot extension - no-explicit-any

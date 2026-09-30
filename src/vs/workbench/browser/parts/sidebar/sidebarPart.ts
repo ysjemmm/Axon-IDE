@@ -3,6 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+// allow-any-unicode-comment-file
+
 import './media/sidebarpart.css';
 import './sidebarActions.js';
 import { ActivityBarPosition, IWorkbenchLayoutService, LayoutSettings, Parts, Position as SideBarPosition } from '../../../services/layout/browser/layoutService.js';
@@ -34,7 +36,7 @@ import { ToggleActivityBarVisibilityActionId } from '../../actions/layoutActions
 import { localize2 } from '../../../../nls.js';
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { VisibleViewContainersTracker } from '../visibleViewContainersTracker.js';
-import { Extensions } from '../../panecomposite.js';
+import { Extensions, PaneComposite } from '../../panecomposite.js';
 
 export class SidebarPart extends AbstractPaneCompositePart {
 
@@ -191,14 +193,18 @@ export class SidebarPart extends AbstractPaneCompositePart {
 			return;
 		}
 		const content = this.contentArea;
-		if (!content || !content.querySelector('.explorer-viewlet')) {
+		// 非激活的 composite 容器会被移出 DOM，所以"激活的是资源管理器"与原先的
+		// querySelector('.explorer-viewlet') 等价；按 id 判断不依赖 CSS 类名。
+		// browser 层不能 import contrib/files 的 VIEWLET_ID，这里直接写它的值。
+		if (!content || this.getActiveComposite()?.getId() !== 'workbench.view.explorer') {
 			return;
 		}
 
 		const hasBorder = !!(this.getColor(SIDE_BAR_BORDER) || this.getColor(contrastBorder));
 		const contentWidth = width - (hasBorder ? 1 : 0);
 		size(content, contentWidth, height);
-		this.getActivePaneComposite()?.layout(new Dimension(contentWidth, height));
+		// IPaneComposite 接口不声明 layout，实际实例都是 PaneComposite
+		(this.getActivePaneComposite() as PaneComposite | undefined)?.layout(new Dimension(contentWidth, height));
 	}
 
 	protected override getTitleAreaDropDownAnchorAlignment(): AnchorAlignment {

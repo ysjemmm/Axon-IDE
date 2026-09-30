@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { MessageOptions } from '@github/copilot-sdk';
 import { decodeBase64 } from '../../../../base/common/buffer.js';
 import { basename } from '../../../../base/common/path.js';
 import { isString } from '../../../../base/common/types.js';
@@ -11,7 +10,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { stripRedundantCdPrefix } from '../../common/commandLineHelpers.js';
 import { IFileEditRecord, ISessionDatabase } from '../../common/sessionDataService.js';
-import { MessageAttachmentKind, type MessageAttachment } from '../../common/state/protocol/state.js';
+import { MessageAttachmentKind, type MessageAttachment, type TextRange } from '../../common/state/protocol/state.js';
 import { MessageKind, ResponsePartKind, ToolCallConfirmationReason, ToolCallStatus, ToolResultContentType, TurnState, buildSubagentSessionUri, type Message, type ResponsePart, type StringOrMarkdown, type ToolCallCompletedState, type ToolResultContent, type Turn } from '../../common/state/sessionState.js';
 import { getInvocationMessage, getPastTenseMessage, getShellLanguage, getSubagentMetadata, getToolDisplayName, getToolInputString, getToolKind, isEditTool, isHiddenTool, synthesizeSkillToolCall } from './copilotToolDisplay.js';
 import { buildSessionDbUri } from '../shared/fileEditTracker.js';
@@ -87,7 +86,17 @@ export interface ISessionEventMessage {
 	};
 }
 
-type ISdkUserMessageAttachment = Required<MessageOptions>['attachments'][number];
+/**
+ * Shape of a persisted `user.message` attachment.
+ * Axon: this used to be `Required<MessageOptions>['attachments'][number]` from
+ * @github/copilot-sdk. The SDK was removed, so the type is declared locally with exactly
+ * the fields {@link sdkAttachmentToProtocol} reads; JSONL replay no longer needs the SDK.
+ */
+type ISdkUserMessageAttachment =
+	| { type: 'file'; path: string; displayName?: string }
+	| { type: 'directory'; path: string; displayName?: string }
+	| { type: 'selection'; filePath: string; displayName: string; selection?: TextRange }
+	| { type: 'blob'; data: string; mimeType: string; displayName?: string };
 
 /** Minimal event shape for `skill.invoked`, used to synthesize a tool-style render. */
 export interface ISessionEventSkillInvoked {

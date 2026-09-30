@@ -3,6 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+// allow-any-unicode-comment-file
+
 import { isAncestorOfActiveElement } from '../../../../../base/browser/dom.js';
 import { alert } from '../../../../../base/browser/ui/aria/aria.js';
 import { WorkbenchActionExecutedClassification, WorkbenchActionExecutedEvent } from '../../../../../base/common/actions.js';
@@ -924,7 +926,9 @@ export function registerChatActions() {
 			const layoutService = accessor.get(IWorkbenchLayoutService);
 			const viewsService = accessor.get(IViewsService);
 			layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
-			viewsService.focusView('workbench.view.chat');
+			// Axon 扩展贡献的对话视图（apps/vscode-extension/package.json 的 views.axon-chat）。
+			// 原先调用的 viewsService.focusView 并不存在，快捷键一按就抛 TypeError。
+			return viewsService.openView('axon.chat', true);
 		}
 	});
 

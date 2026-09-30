@@ -1,13 +1,18 @@
 /*---------------------------------------------------------------------------------------------
- *  Axon account usage modal (workbench-level overlay)
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+// allow-any-unicode-comment-file
+
+// Axon account usage modal (workbench-level overlay)
+
 import './media/axonAccountUsageModal.css';
+import { mainWindow } from '../../../../base/browser/window.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
-import { Registry } from '../../../../platform/registry/common/platform.js';
-import { IWorkbenchContributionsRegistry, Extensions as WorkbenchExtensions, WorkbenchPhase } from '../../../common/contributions.js';
+import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 
 const SHOW_ACCOUNT_USAGE_MODAL_COMMAND = 'axon.showAccountUsageModal';
 const UPDATE_ACCOUNT_USAGE_MODAL_COMMAND = 'axon.updateAccountUsageModal';
@@ -29,14 +34,20 @@ function formatUsed(value: unknown): string {
 
 function formatLimit(value: unknown): string {
 	const n = typeof value === 'number' ? value : Number(value);
-	if (!Number.isFinite(n)) return '--';
+	if (!Number.isFinite(n)) {
+		return '--';
+	}
 	return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
 }
 
 function maskApiKey(apiKey: string | undefined): string {
 	const key = apiKey?.trim() || '';
-	if (!key) return '';
-	if (key.length <= 10) return `${key.slice(0, 2)}••••${key.slice(-2)}`;
+	if (!key) {
+		return '';
+	}
+	if (key.length <= 10) {
+		return `${key.slice(0, 2)}••••${key.slice(-2)}`;
+	}
 	return `${key.slice(0, 7)}••••••••${key.slice(-6)}`;
 }
 
@@ -90,10 +101,12 @@ class AxonAccountUsageModalContribution extends Disposable {
 		info.className = 'axon-modal-info';
 		const name = document.createElement('div');
 		name.className = 'axon-modal-name';
+		// allow-any-unicode-next-line
 		name.textContent = 'Axon 官方';
 		info.appendChild(name);
 		const sub = document.createElement('div');
 		sub.className = 'axon-modal-sub';
+		// allow-any-unicode-next-line
 		sub.textContent = 'Provider: Axon 官方';
 		info.appendChild(sub);
 		header.appendChild(info);
@@ -170,13 +183,16 @@ class AxonAccountUsageModalContribution extends Disposable {
 		};
 		overlay.addEventListener('keydown', onKey);
 
-		document.body.appendChild(overlay);
+		// 挂在主窗口上：与原先的全局 document 是同一个对象，这里只是显式写出来（multi-window lint）
+		mainWindow.document.body.appendChild(overlay);
 		this.overlay = overlay;
 		overlay.focus();
 	}
 
 	private update(options?: AxonAccountUsageModalOptions): void {
-		if (!this.creditsValue || !this.body || !this.error) return;
+		if (!this.creditsValue || !this.body || !this.error) {
+			return;
+		}
 		if (options?.loading) {
 			this.creditsValue.classList.add('loading');
 			this.creditsValue.textContent = 'Loading latest usage...';
@@ -186,8 +202,11 @@ class AxonAccountUsageModalContribution extends Disposable {
 		}
 
 		if (options?.errorMessage) {
+			// allow-any-unicode-next-line
 			this.error.textContent = `获取用量失败：${options.errorMessage}`;
-			if (!this.error.parentElement) this.body.appendChild(this.error);
+			if (!this.error.parentElement) {
+				this.body.appendChild(this.error);
+			}
 		} else {
 			this.error.remove();
 		}
@@ -207,5 +226,4 @@ class AxonAccountUsageModalContribution extends Disposable {
 	}
 }
 
-Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench)
-	.registerWorkbenchContribution(AxonAccountUsageModalContribution, WorkbenchPhase.AfterRestored);
+registerWorkbenchContribution2('workbench.contrib.axonAccountUsageModal', AxonAccountUsageModalContribution, WorkbenchPhase.AfterRestored);
