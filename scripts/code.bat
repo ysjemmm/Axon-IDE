@@ -33,8 +33,9 @@ for %%A in (%*) do (
 	)
 )
 
-:: Launch Code
-%CODE% . %DISABLE_TEST_EXTENSION% %*
+:: Launch Code with GPU acceleration disabled by default.
+:: Keep forwarding caller arguments so existing launch options still work.
+%CODE% . --disable-gpu %DISABLE_TEST_EXTENSION% %*
 goto end
 
 :builtin

@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { getLocalNetworkAllowRules } from '../../../../base/browser/browser.js';
 import * as dom from '../../../../base/browser/dom.js';
 import { parentOriginHash } from '../../../../base/browser/iframe.js';
 import { mainWindow } from '../../../../base/browser/window.js';
@@ -145,7 +146,7 @@ export class WebWorkerExtensionHost extends Disposable implements IExtensionHost
 		const iframe = document.createElement('iframe');
 		iframe.setAttribute('class', 'web-worker-ext-host-iframe');
 		iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-		iframe.setAttribute('allow', 'usb; serial; hid; cross-origin-isolated; local-network-access;');
+		iframe.setAttribute('allow', ['usb', 'serial', 'hid', 'cross-origin-isolated', ...getLocalNetworkAllowRules()].map(rule => `${rule};`).join(' '));
 		iframe.setAttribute('aria-hidden', 'true');
 		iframe.style.display = 'none';
 

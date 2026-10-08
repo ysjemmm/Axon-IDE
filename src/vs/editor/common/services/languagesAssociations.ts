@@ -67,6 +67,14 @@ function _registerLanguageAssociation(association: ILanguageAssociation, userCon
 				return; // same mime or userConfigured is ok
 			}
 
+			// Axon: same language id is not a conflict either. A second contribution of an
+			// existing language that omits `mimetypes` gets a derived `text/x-<id>` mime
+			// (e.g. Prettier re-declaring `handlebars` for .hbs vs the built-in
+			// `text/x-handlebars-template`), yet the file still resolves to the same language.
+			if (a.id === associationItem.id) {
+				return;
+			}
+
 			if (associationItem.extension && a.extension === associationItem.extension) {
 				console.warn(`Overwriting extension <<${associationItem.extension}>> to now point to mime <<${associationItem.mime}>>`);
 			}

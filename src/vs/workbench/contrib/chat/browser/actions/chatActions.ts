@@ -913,7 +913,9 @@ export function registerChatActions() {
 			super({
 				id: 'axon.focusChat',
 				title: localize2('axon.focusChat', "Open Axon Chat"),
-				f1: true,
+				// 不设 f1：Axon 扩展的 contributes.commands 已声明同名命令（命令面板里显示为
+				// "Axon: 聚焦对话面板"）。这里再 addCommand 会让扩展加载时报
+				// "Command `axon.focusChat` already registered"。命令本身与快捷键照常注册。
 				keybinding: [
 					{
 						primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyI,

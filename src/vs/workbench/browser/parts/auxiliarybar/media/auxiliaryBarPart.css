@@ -22,6 +22,88 @@
 	margin-right: 4px;
 }
 
+/* Axon Workspace mode switch: one capsule, a sliding raised indicator. */
+.monaco-workbench .part.auxiliarybar > .title > .title-actions .action-item.menu-entry:has(> .action-label.codicon-comment-discussion),
+.monaco-workbench .part.auxiliarybar > .title > .title-actions .action-item.menu-entry:has(> .action-label.codicon-code) {
+	width: 32px;
+	height: 26px;
+	margin: 0;
+	padding: 2px 0;
+	box-sizing: border-box;
+	background: color-mix(in srgb, var(--vscode-foreground) 9%, var(--vscode-sideBar-background));
+}
+
+/* Only the chat item is positioned, so the code item's background never paints over the indicator. */
+.monaco-workbench .part.auxiliarybar > .title > .title-actions .action-item.menu-entry:has(> .action-label.codicon-comment-discussion) {
+	position: relative;
+	padding-left: 2px;
+	border-radius: 8px 0 0 8px;
+}
+
+.monaco-workbench .part.auxiliarybar > .title > .title-actions .action-item.menu-entry:has(> .action-label.codicon-code) {
+	position: static;
+	padding-right: 2px;
+	margin-right: 8px;
+	border-radius: 0 8px 8px 0;
+}
+
+.monaco-workbench .part.auxiliarybar > .title > .title-actions .action-item.menu-entry:has(> .action-label.codicon-comment-discussion)::after {
+	content: '';
+	position: absolute;
+	left: 2px;
+	top: 2px;
+	width: 30px;
+	height: 22px;
+	border-radius: 6px;
+	background: var(--vscode-sideBar-background);
+	box-shadow: 0 1px 2px color-mix(in srgb, black 18%, transparent);
+	transition: transform 180ms cubic-bezier(0.2, 0, 0, 1);
+	pointer-events: none;
+	z-index: 0;
+}
+
+.monaco-workbench .part.auxiliarybar > .title > .title-actions .actions-container:has(.action-label.codicon-code.disabled) .action-item:has(> .action-label.codicon-comment-discussion)::after {
+	transform: translateX(30px);
+}
+
+.monaco-workbench .part.auxiliarybar > .title > .title-actions .action-item.menu-entry:has(> .action-label.codicon-comment-discussion) > .action-label,
+.monaco-workbench .part.auxiliarybar > .title > .title-actions .action-item.menu-entry:has(> .action-label.codicon-code) > .action-label {
+	position: relative;
+	z-index: 1;
+	width: 30px;
+	height: 22px;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: transparent !important;
+	border-radius: 6px;
+	opacity: 1;
+	color: color-mix(in srgb, var(--vscode-foreground) 55%, transparent);
+	transition: color 180ms ease;
+}
+
+.monaco-workbench .part.auxiliarybar > .title > .title-actions .action-item.menu-entry:has(> .action-label.codicon-comment-discussion) > .action-label::before,
+.monaco-workbench .part.auxiliarybar > .title > .title-actions .action-item.menu-entry:has(> .action-label.codicon-code) > .action-label::before {
+	position: static;
+	margin: 0;
+	color: inherit !important;
+	opacity: 1 !important;
+}
+
+.monaco-workbench .part.auxiliarybar > .title > .title-actions .action-item.menu-entry:has(> .action-label.codicon-comment-discussion) > .action-label.disabled,
+.monaco-workbench .part.auxiliarybar > .title > .title-actions .action-item.menu-entry:has(> .action-label.codicon-code) > .action-label.disabled,
+.monaco-workbench .part.auxiliarybar > .title > .title-actions .action-item.menu-entry:has(> .action-label.codicon-comment-discussion) > .action-label:hover,
+.monaco-workbench .part.auxiliarybar > .title > .title-actions .action-item.menu-entry:has(> .action-label.codicon-code) > .action-label:hover {
+	color: var(--vscode-foreground);
+}
+
+/* The trailing separator before maximize is noise next to the capsule. */
+.monaco-workbench .part.auxiliarybar:has(.codicon-comment-discussion) > .title > .title-actions .action-item:has(> .action-label.separator) {
+	display: none;
+}
+
 .monaco-workbench .part.auxiliarybar > .title {
 	background-color: var(--vscode-sideBarTitle-background);
 }
@@ -104,4 +186,10 @@
 
 .monaco-workbench .auxiliarybar.pane-composite-part > .title.has-composite-bar > .title-actions .monaco-action-bar .action-item {
 	max-width: 150px;
+}
+
+/* Axon：对话面板激活时隐藏整行标题栏（"AXON WORKSPACE" 那行），由面板内的会话切换器顶替；
+   高度回收见 auxiliaryBarPart.ts 的 updateAxonChatActive（改 options.hasTitle）。 */
+.monaco-workbench .part.auxiliarybar.axon-chat-active > .composite.title {
+	display: none;
 }

@@ -9,7 +9,11 @@
 #endif
 
 #define AppName     "Axon IDE"
-#define AppVersion  "0.1.0"
+; 版本由 CI 通过 /DAppVersion=<product.json 的 version> 传入，与 About 对话框、发布 tag 同源；
+; 这里的缺省值仅供本地试打包使用，不参与正式发布。
+#ifndef AppVersion
+  #define AppVersion  "1.106.211"
+#endif
 #define AppExeName  "Axon IDE.exe"
 
 [Setup]

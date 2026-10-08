@@ -40,6 +40,28 @@ jobs:
         id: pkg
         run: echo "version=$(node -p "require('./product.json').version")" >> "$GITHUB_OUTPUT"
 
+      # 手填的 release_tag 若版本部分与 product.json.version 不一致，直接失败。
+      # 安装包报告的版本取自 product.json，而更新检查拿 release tag 的版本部分与之比较；
+      # 两者不一致时，更新检查会永远判定「有新版本」，用户装完仍被反复提示升级。
+      - name: Verify release tag matches product version
+        run: |
+          tag="${{ inputs.release_tag }}"
+          if [ -z "$tag" ]; then
+            echo "::notice::未指定 release_tag，将按 product.json 版本自动生成 tag，跳过校验"
+            exit 0
+          fi
+          tagver="${tag#v}"
+          tagver="${tagver%%-*}"
+          pkgver="${{ steps.pkg.outputs.version }}"
+          if [ "$tagver" != "$pkgver" ]; then
+            echo "::error::release_tag 的版本部分 ($tagver) 与 product.json.version ($pkgver) 不一致"
+            echo "安装包报告的版本取自 product.json，更新检查用 release tag 的版本部分与之比较，"
+            echo "两者不一致会导致用户装上之后仍被反复提示升级。"
+            echo "请二选一：把 release_tag 改成 $pkgver（或 v$pkgver-build.N），或把 product.json 的 version 改成 $tagver。"
+            exit 1
+          fi
+          echo "校验通过：release_tag 版本部分 ($tagver) == product.json.version ($pkgver)"
+
       - name: Resolve release tag
         id: release
         run: |
@@ -319,7 +341,9 @@ jobs:
         run: |
           $appDir = Join-Path (Split-Path $PWD -Parent) "VSCode-win32-x64"
           $outDir = "$PWD\.build"
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppDir="$appDir" /DOutputDir="$outDir" build\win32\axon-ide.iss
+          # 安装器的 AppVersion 也从 product.json 读，保证与 About 对话框、发布 tag 同源
+          $appVersion = (Get-Content product.json -Raw | ConvertFrom-Json).version
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppDir="$appDir" /DOutputDir="$outDir" /DAppVersion="$appVersion" build\win32\axon-ide.iss
           Write-Host "Installer: $outDir\Axon-IDE-win32-x64-setup.exe ($((Get-Item "$outDir\Axon-IDE-win32-x64-setup.exe").Length) bytes)"
 
       - name: Upload artifacts

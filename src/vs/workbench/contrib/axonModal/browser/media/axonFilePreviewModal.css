@@ -1,0 +1,255 @@
+/* Axon File Preview Modal — 全 IDE 级文件预览遮罩 */
+
+/*
+ * 与 axonAccountUsageModal 的区别：那个卡片是品牌色硬编码深色（它只显示几行账号信息，
+ * 固定配色不影响可读性）。预览窗要显示代码、表格、网页、图片，必须跟随主题变量 ——
+ * 浅色主题下沿用深色卡片会让表格文字糊成一片。
+ */
+
+.axon-preview-overlay {
+	position: fixed;
+	inset: 0;
+	/* 高于 workbench 内部所有层（编辑器/面板/通知/快速选择），但与 Credits 浮层同级 */
+	z-index: 2600;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.45);
+}
+
+.axon-preview-card {
+	display: flex;
+	flex-direction: column;
+	/* 占窗口大部分但留边：留白让用户一眼看出这是浮层、点外侧能关闭 */
+	width: min(1180px, calc(100vw - 96px));
+	height: min(840px, calc(100vh - 96px));
+	border-radius: 12px;
+	overflow: hidden;
+	/*
+	 * 兜底色不能省：某些主题不定义 editor 前景/背景变量，解析失败时卡片会变透明
+	 * （已踩过——overlay 挂错容器导致整个浮层透出底下的编辑器）。
+	 */
+	background: var(--vscode-editor-background, #1f1f1f);
+	color: var(--vscode-editor-foreground, #cccccc);
+	border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.25));
+	/* 禁用 GPU 时，大范围软阴影也要由 CPU 栅格化；保留轻微层次即可。 */
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+	font-family: var(--vscode-font-family);
+}
+
+.axon-preview-header {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 12px 14px;
+	flex: 0 0 auto;
+	background: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-editor-background, #1f1f1f));
+	border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
+}
+
+.axon-preview-title {
+	flex: 1;
+	min-width: 0;
+	font-size: 13px;
+	font-weight: 600;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--vscode-foreground);
+}
+
+.axon-preview-badge {
+	flex: 0 0 auto;
+	padding: 2px 7px;
+	border-radius: 5px;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.4px;
+	text-transform: uppercase;
+	background: var(--vscode-badge-background);
+	color: var(--vscode-badge-foreground);
+}
+
+.axon-preview-actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 0 0 auto;
+}
+
+.axon-preview-btn {
+	height: 26px;
+	padding: 0 10px;
+	border-radius: 5px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.14));
+	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+	font-size: 12px;
+	font-family: inherit;
+	cursor: pointer;
+}
+
+.axon-preview-btn:hover {
+	background: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.24));
+}
+
+.axon-preview-close {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	border: none;
+	border-radius: 5px;
+	background: transparent;
+	color: var(--vscode-foreground);
+	font-size: 15px;
+	line-height: 1;
+	cursor: pointer;
+}
+
+.axon-preview-close:hover {
+	background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+.axon-preview-body {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: auto;
+	background: var(--vscode-editor-background, #1f1f1f);
+}
+
+/* 状态提示（加载中 / 不支持预览）：居中单行 */
+.axon-preview-state {
+	height: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	font-size: 13px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.axon-preview-spinner {
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	border: 2px solid var(--vscode-descriptionForeground);
+	border-top-color: transparent;
+	animation: axon-preview-spin 0.7s linear infinite;
+}
+
+@keyframes axon-preview-spin {
+	to { transform: rotate(360deg); }
+}
+
+/* 纯文本 / 代码 */
+.axon-preview-text {
+	margin: 0;
+	padding: 16px 18px;
+	font-family: var(--vscode-editor-font-family, var(--monaco-monospace-font));
+	font-size: var(--vscode-editor-font-size, 13px);
+	line-height: 1.6;
+	white-space: pre-wrap;
+	word-break: break-word;
+	color: var(--vscode-editor-foreground);
+}
+
+/* 网页 / SVG / PDF：iframe 铺满 */
+.axon-preview-frame {
+	display: block;
+	width: 100%;
+	height: 100%;
+	border: 0;
+	/* 白底兜底：HTML/SVG 多数假设浅色背景，深色主题下直接透出会看不清内容 */
+	background: #ffffff;
+}
+
+/* 图片：居中、不放大超过原始尺寸 */
+.axon-preview-image-wrap {
+	height: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 16px;
+	/* 棋盘格：透明图片（PNG/SVG 图标）在纯色底上看不出透明区域 */
+	background-image:
+		linear-gradient(45deg, rgba(128, 128, 128, 0.12) 25%, transparent 25%),
+		linear-gradient(-45deg, rgba(128, 128, 128, 0.12) 25%, transparent 25%),
+		linear-gradient(45deg, transparent 75%, rgba(128, 128, 128, 0.12) 75%),
+		linear-gradient(-45deg, transparent 75%, rgba(128, 128, 128, 0.12) 75%);
+	background-size: 18px 18px;
+	background-position: 0 0, 0 9px, 9px -9px, -9px 0;
+}
+
+.axon-preview-image-wrap img {
+	max-width: 100%;
+	max-height: 100%;
+	object-fit: contain;
+}
+
+/* Office 文档转出的表格 / 文本 */
+.axon-preview-doc {
+	padding: 20px 24px;
+	font-size: 13px;
+	line-height: 1.7;
+	color: var(--vscode-editor-foreground, #cccccc);
+}
+
+.axon-preview-doc h2 {
+	margin: 22px 0 10px;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.axon-preview-doc h2:first-child {
+	margin-top: 0;
+}
+
+.axon-preview-doc p {
+	margin: 0 0 10px;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/*
+ * 表格用 auto 布局而不是 fixed：Excel 的列宽差异极大（某列是日期、某列是长描述），
+ * fixed 会把所有列等宽切开，长文本挤成竖条 —— 这正是侧栏里表格难读的原因之一。
+ * 配合外层横向滚动，让列按内容自然展开。
+ */
+.axon-preview-doc table {
+	border-collapse: collapse;
+	table-layout: auto;
+	margin: 0 0 16px;
+	font-size: 12px;
+}
+
+.axon-preview-doc th,
+.axon-preview-doc td {
+	/* 纵向 7px：截图里 6px 配 1.7 行高时文字几乎贴在格线上，读一列数字很累 */
+	padding: 7px 12px;
+	border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.3));
+	text-align: left;
+	vertical-align: top;
+	line-height: 1.45;
+	white-space: nowrap;
+}
+
+.axon-preview-doc th {
+	background: var(--vscode-editorGroupHeader-tabsBackground, rgba(128, 128, 128, 0.12));
+	font-weight: 600;
+	position: sticky;
+	top: 0;
+	/* sticky 表头要盖住滚上来的数据行 */
+	z-index: 1;
+}
+
+.axon-preview-doc tbody tr:nth-child(even) td {
+	background: rgba(128, 128, 128, 0.05);
+}
+
+.axon-preview-doc-note {
+	margin: 0 0 16px;
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+}

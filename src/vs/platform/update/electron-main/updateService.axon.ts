@@ -11,7 +11,7 @@
 
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
-import { mkdir, readFile, writeFile } from 'fs/promises';
+import { mkdir, writeFile } from 'fs/promises';
 import * as path from '../../../base/common/path.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
@@ -370,7 +370,7 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 			this.downloadedPackagePath = downloadPath;
 			// allow-any-unicode-next-line
 			// 持久化下载路径：即使关闭 IDE 再重启，也能恢复到 Ready 状态
-			await this.saveDownloadedPackagePath(downloadPath);
+			await this.saveDownloadedPackagePath(downloadPath, update.productVersion);
 			// 清除"下载中"标记——下载已完整完成
 			await this.clearDownloadingPackagePath();
 			this.logService.info(`axon-update#doDownload - persisted path: ${downloadPath}`);
@@ -425,7 +425,7 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 
 	async quitAndInstall(): Promise<void> {
 		// 优先用内存中的路径，fallback 到持久化的缓存路径
-		const pkgPath = this.downloadedPackagePath || this.getCachedDownloadedPackagePath();
+		const pkgPath = this.downloadedPackagePath || this.getCachedDownloadedPackage()?.path;
 		if (this._state.type !== StateType.Ready || !pkgPath) {
 			return;
 		}
@@ -441,12 +441,45 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 		const platform = process.platform;
 
 		if (platform === 'win32') {
-			// Windows: silent Inno Setup installer
-			spawn(pkgPath, ['/silent', '/log', '/nocloseapplications', '/mergetasks=runcode,!desktopicon,!quicklaunchicon'], {
+			// Windows: silent Inno Setup installer.
+			//
+			// ⚠️ 修复记录（用户反馈：关闭重开后又回到旧版本）：
+			// 之前这里带了 /nocloseapplications，并且 spawn 完立刻同步调用 quit(true)。
+			// /nocloseapplications 会让 Inno Setup 跳过"检测并等待目标进程退出"这一步，
+			// 直接尝试覆盖文件；而 quit(true) 到进程真正退出、文件锁真正释放之间存在时间差。
+			// 两者叠加就是纯竞态：安装器可能在旧进程还占用着主 exe/dll 时就去写文件，
+			// /silent 模式下这类覆盖失败是静默的（不弹错误），结果就是"装了个寂寞"——
+			// 部分文件没换成功，下次启动加载的仍是旧版本可执行文件。
+			//
+			// 修复：去掉 /nocloseapplications，改回官方 Win32UpdateService 的做法——
+			// 让 Inno Setup 自己内置的进程检测/等待机制负责"等旧进程真正退出再覆盖"，
+			// 应用这边不再用参数去关掉这层保护。
+			const installer = spawn(pkgPath, ['/silent', '/log', '/mergetasks=runcode,!desktopicon,!quicklaunchicon'], {
 				detached: true,
 				stdio: ['ignore', 'ignore', 'ignore'],
 				env: { ...process.env, __COMPAT_LAYER: 'RunAsInvoker' },
 			});
+			installer.unref();
+
+			// 安装器进程本身起不来（如路径错误/权限问题）要能兜住并回退状态，
+			// 而不是吞掉错误后仍然静默退出应用（那样用户会看到应用消失但更新完全没跑）。
+			let installerFailed = false;
+			installer.once('error', (err) => {
+				installerFailed = true;
+				this.logService.error('axon-update#quitAndInstall - failed to spawn installer', err);
+				this.setState(State.Idle(UpdateType.Setup, 'Failed to launch installer'));
+			});
+
+			// 给 installer 的 error 事件一点时间冒出来再决定是否退出：spawn 是异步的，
+			// 紧接着同步 quit 会让上面这个 error 监听器完全来不及生效。
+			// 这里不是在"赌安装器已经接管文件"（那是 Inno Setup 自己的职责），
+			// 只是确保"进程确实起来了"这个前提成立后才退出当前应用。
+			setTimeout(() => {
+				if (installerFailed) return;
+				this.logService.info('axon-update#quitAndInstall - installer launched, quitting now');
+				this.lifecycleMainService.quit(true);
+			}, 300);
+			return;
 		} else if (platform === 'darwin') {
 			// macOS: open the dmg for the user to drag-install
 			spawn('open', [pkgPath], { detached: true, stdio: 'ignore' });
@@ -487,20 +520,32 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 		return path.join(this.environmentMainService.userDataPath, LAST_DOWNLOADED_PACKAGE_FILE);
 	}
 
-	private getCachedDownloadedPackagePath(): string | undefined {
+	/**
+	 * 读取"已下载待安装"的记录。
+	 *
+	 * 记录里同时存该安装包对应的版本号——启动时靠它判断这个包是否还值得提示安装
+	 * （见 tryRecoverDownloadedPackage）。兼容旧格式：早期只写了一行裸路径，没有版本号。
+	 */
+	private getCachedDownloadedPackage(): { path: string; version?: string } | undefined {
 		try {
 			const p = this.getDownloadedPackageCachePath();
 			if (!existsSync(p)) return undefined;
 			const raw = require('fs').readFileSync(p, 'utf-8').trim();
-			return raw || undefined;
+			if (!raw) return undefined;
+			if (raw.startsWith('{')) {
+				const parsed = JSON.parse(raw) as { path?: string; version?: string };
+				if (!parsed.path) return undefined;
+				return { path: parsed.path, version: parsed.version };
+			}
+			return { path: raw };
 		} catch {
 			return undefined;
 		}
 	}
 
-	private async saveDownloadedPackagePath(pkgPath: string): Promise<void> {
+	private async saveDownloadedPackagePath(pkgPath: string, version: string | undefined): Promise<void> {
 		try {
-			await writeFile(this.getDownloadedPackageCachePath(), pkgPath, 'utf-8');
+			await writeFile(this.getDownloadedPackageCachePath(), JSON.stringify({ path: pkgPath, version }), 'utf-8');
 		} catch (err) {
 			this.logService.error('axon-update#saveDownloadedPackagePath - failed', err);
 		}
@@ -577,30 +622,60 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 		await this.clearDownloadingPackagePath();
 	}
 
-	/** 启动时恢复：如果上次下载的安装包还在磁盘上，直接进入 Ready 状态 */
+	/**
+	 * 启动时恢复：仅当上次下载的安装包【确实比当前版本新】时，才恢复 Ready 状态。
+	 *
+	 * 为什么必须比对版本：安装完成后这条记录不会自己消失——安装器是独立进程，装完把本应用
+	 * 重启，没人回来收拾记录。早先这里只要文件还在就无条件恢复 Ready，于是标题栏永远挂着
+	 * Update 按钮，点它又把同一个安装包装一遍：用户看到的就是"已经升级到最新版，却还有一个
+	 * Update 按钮"，而且每次启动都复现。
+	 *
+	 * 判据：记录里的版本 <= 当前版本 => 这个包要么已经装上、要么已经过期，清理掉即可。
+	 * 旧格式记录（没有版本号）无法判断，一律按"已过期"处理：宁可让用户必要时重新下载一次，
+	 * 也不要永久残留一个点不掉的更新提示。
+	 */
 	private async tryRecoverDownloadedPackage(): Promise<void> {
 		// 先检查是否有中断的下载（崩溃/异常关机残留）
 		await this.cleanupInterruptedDownload();
 
-		const cachedPath = this.getCachedDownloadedPackagePath();
-		if (!cachedPath) return;
+		const cached = this.getCachedDownloadedPackage();
+		if (!cached) return;
 
-		if (!existsSync(cachedPath)) {
+		if (!existsSync(cached.path)) {
 			// 包已被清理（如用户手动删除），清除残留记录
-			this.logService.info(`axon-update#tryRecover - cached package gone: ${cachedPath}`);
+			this.logService.info(`axon-update#tryRecover - cached package gone: ${cached.path}`);
 			await this.clearDownloadedPackagePath();
 			return;
 		}
 
-		this.logService.info(`axon-update#tryRecover - recovered package: ${cachedPath}`);
-		this.downloadedPackagePath = cachedPath;
+		const target = cached.version;
+		if (!target || compareVersions(target, this.productService.version) <= 0) {
+			this.logService.info(`axon-update#tryRecover - discarding stale package (recorded=${target ?? 'unknown'}, current=${this.productService.version}): ${cached.path}`);
+			await this.clearDownloadedPackagePath();
+			// 安装包本体一并删掉，别让上百 MB 永久占着用户数据目录
+			await this.deleteCachedPackageFile(cached.path);
+			return;
+		}
+
+		this.logService.info(`axon-update#tryRecover - recovered package: ${cached.path} (${target})`);
+		this.downloadedPackagePath = cached.path;
 		// 构造简易 update 对象供 Ready 状态使用
 		const recoveredUpdate: IUpdate = {
-			version: `recovered-${Date.now()}`,
-			productVersion: this.productService.version,
-			url: cachedPath,
+			version: `v${target}`,
+			productVersion: target,
+			url: cached.path,
 		};
 		this.setState(State.Ready(recoveredUpdate, false, false));
+	}
+
+	/** 删除已下载的安装包文件（best-effort：删不掉只记日志，不影响启动） */
+	private async deleteCachedPackageFile(pkgPath: string): Promise<void> {
+		try {
+			const fs = require('fs/promises');
+			await fs.unlink(pkgPath);
+		} catch (err) {
+			this.logService.warn(`axon-update#deleteCachedPackageFile - failed: ${(err as Error).message}`);
+		}
 	}
 
 	// allow-any-unicode-next-line
@@ -608,18 +683,6 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 
 	private getTimestampFilePath(): string {
 		return path.join(this.environmentMainService.userDataPath, LAST_UPDATE_TIMESTAMP_FILE);
-	}
-
-	private getLastUpdateTimestamp(): number | undefined {
-		try {
-			const p = this.getTimestampFilePath();
-			if (!existsSync(p)) return undefined;
-			const raw = require('fs').readFileSync(p, 'utf-8').trim();
-			const ts = Number(raw);
-			return Number.isNaN(ts) ? undefined : ts;
-		} catch {
-			return undefined;
-		}
 	}
 
 	private async saveLastUpdateTimestamp(publishedAt: string): Promise<void> {
