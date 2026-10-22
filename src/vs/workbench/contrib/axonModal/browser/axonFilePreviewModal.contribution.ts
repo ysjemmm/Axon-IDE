@@ -16,14 +16,17 @@
 
 import './media/axonFilePreviewModal.css';
 import { mainWindow } from '../../../../base/browser/window.js';
-import { Disposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
+import { Schemas } from '../../../../base/common/network.js';
 import { CommandsRegistry, ICommandService } from '../../../../platform/commands/common/commands.js';
+import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
+import { IWebviewService } from '../../webview/browser/webview.js';
 
 const SHOW_FILE_PREVIEW_MODAL_COMMAND = 'axon.showFilePreviewModal';
 const UPDATE_FILE_PREVIEW_MODAL_COMMAND = 'axon.updateFilePreviewModal';
 
-type PreviewKind = 'html' | 'svg' | 'image' | 'pdf' | 'text' | 'office' | 'unsupported';
+type PreviewKind = 'html' | 'svg' | 'image' | 'pdf' | 'text' | 'office' | 'diff' | 'unsupported';
 
 interface AxonFilePreviewOptions {
 	/** 展示用文件名 */
@@ -39,6 +42,14 @@ interface AxonFilePreviewOptions {
 	badge?: string;
 	/** unsupported 时的说明文案 */
 	message?: string;
+	/** diff 模式：改动前文本（原稿快照转出的文本） */
+	before?: string;
+	/** diff 模式：改动后文本（现文件转出的文本） */
+	after?: string;
+	/** diff 模式：原稿快照目录（恢复原稿时回传给扩展） */
+	snapshotDir?: string;
+	/** diff 模式：是否显示「恢复原稿」按钮 */
+	restorable?: boolean;
 	loading?: boolean;
 }
 
@@ -51,9 +62,17 @@ class AxonFilePreviewModalContribution extends Disposable {
 	private keydownHandler: ((e: KeyboardEvent) => void) | undefined;
 	/** 本次预览创建的 blob URL（PDF），关闭时统一释放 */
 	private blobUrls: string[] = [];
+	/**
+	 * HTML 预览用的 webview 及其事件监听。
+	 * 和 blobUrls 一样按「一次预览」为单位：切换文件、关闭浮层、销毁贡献时统一释放，
+	 * 否则连续点不同产物会一直攒 webview（每个都是一个独立渲染进程里的 iframe）。
+	 */
+	private htmlWebviewDisposables: DisposableStore | undefined;
 
 	constructor(
 		@ICommandService private readonly commandService: ICommandService,
+		@IWebviewService private readonly webviewService: IWebviewService,
+		@IOpenerService private readonly openerService: IOpenerService,
 	) {
 		super();
 		this._register(CommandsRegistry.registerCommand(SHOW_FILE_PREVIEW_MODAL_COMMAND, (_accessor, options?: AxonFilePreviewOptions) => this.show(options)));
@@ -170,6 +189,8 @@ class AxonFilePreviewModalContribution extends Disposable {
 		this.bodyEl.textContent = '';
 		// 切换文件时先释放上一个 PDF 的 blob，不然连续预览会一直攒内存
 		this.releaseBlobUrls();
+		// 同理释放上一个 HTML 预览的 webview
+		this.releaseHtmlWebview();
 
 		if (options?.loading) {
 			this.bodyEl.appendChild(this.buildLoading());
@@ -184,7 +205,7 @@ class AxonFilePreviewModalContribution extends Disposable {
 				this.bodyEl.appendChild(this.buildText(content));
 				return;
 			case 'html':
-				this.bodyEl.appendChild(this.buildFrame(content, name, 'text/html'));
+				this.bodyEl.appendChild(this.buildHtmlWebview(content, name));
 				return;
 			case 'svg':
 				// image/svg+xml 而不是 text/html：浏览器会按图片渲染并自适应缩放，
@@ -199,6 +220,9 @@ class AxonFilePreviewModalContribution extends Disposable {
 				return;
 			case 'office':
 				this.bodyEl.appendChild(this.buildDoc(content));
+				return;
+			case 'diff':
+				this.bodyEl.appendChild(this.buildDiff(options));
 				return;
 			default:
 				// allow-any-unicode-next-line
@@ -226,6 +250,119 @@ class AxonFilePreviewModalContribution extends Disposable {
 		const text = mainWindow.document.createElement('span');
 		text.textContent = message;
 		wrap.appendChild(text);
+		return wrap;
+	}
+
+	/**
+	 * Cowork 改动对比：左右两栏行级 diff。
+	 *
+	 * 行对齐用朴素双指针 + 有限窗口锚点搜索（LCS 对数千行的 Office 转出文本太重）：
+	 * 相同行折叠为上下文行，不同行左右成对展示。办公文档的改动通常集中在
+	 * 少数段落/单元格，这种对齐足够准确。
+	 */
+	private buildDiff(options?: AxonFilePreviewOptions): HTMLElement {
+		const wrap = mainWindow.document.createElement('div');
+		wrap.className = 'axon-preview-diff';
+
+		const beforeLines = (options?.before || '').split(/\r?\n/);
+		const afterLines = (options?.after || '').split(/\r?\n/);
+
+		const rows: Array<{ type: 'same' | 'changed'; before?: string; after?: string }> = [];
+		let i = 0;
+		let j = 0;
+		const WINDOW = 200;
+		while (i < beforeLines.length || j < afterLines.length) {
+			if (i < beforeLines.length && j < afterLines.length && beforeLines[i] === afterLines[j]) {
+				rows.push({ type: 'same', before: beforeLines[i], after: afterLines[j] });
+				i++;
+				j++;
+				continue;
+			}
+			let nextJ = -1;
+			for (let k = j; k < Math.min(afterLines.length, j + WINDOW); k++) {
+				if (i < beforeLines.length && beforeLines[i] === afterLines[k]) { nextJ = k; break; }
+			}
+			if (nextJ >= 0) {
+				for (; j < nextJ; j++) rows.push({ type: 'changed', after: afterLines[j] });
+				continue;
+			}
+			let nextI = -1;
+			for (let k = i; k < Math.min(beforeLines.length, i + WINDOW); k++) {
+				if (j < afterLines.length && beforeLines[k] === afterLines[j]) { nextI = k; break; }
+			}
+			if (nextI >= 0) {
+				for (; i < nextI; i++) rows.push({ type: 'changed', before: beforeLines[i] });
+				continue;
+			}
+			if (i < beforeLines.length && j < afterLines.length) {
+				rows.push({ type: 'changed', before: beforeLines[i], after: afterLines[j] });
+				i++;
+				j++;
+			} else if (i < beforeLines.length) {
+				rows.push({ type: 'changed', before: beforeLines[i] });
+				i++;
+			} else {
+				rows.push({ type: 'changed', after: afterLines[j] });
+				j++;
+			}
+		}
+
+		const changedCount = rows.filter((r) => r.type === 'changed').length;
+		if (changedCount === 0) {
+			const state = this.buildState('两个版本内容一致，没有发现改动');
+			state.classList.add('axon-preview-diff-same');
+			wrap.appendChild(state);
+			return wrap;
+		}
+
+		const bar = mainWindow.document.createElement('div');
+		bar.className = 'axon-preview-diff-bar';
+		const summary = mainWindow.document.createElement('span');
+		summary.textContent = `${changedCount} 处改动`;
+		bar.appendChild(summary);
+		if (options?.restorable && options?.path && options?.snapshotDir) {
+			const restoreBtn = mainWindow.document.createElement('button');
+			restoreBtn.className = 'axon-preview-btn axon-preview-diff-restore';
+			// allow-any-unicode-next-line
+			restoreBtn.textContent = '恢复原稿';
+			restoreBtn.addEventListener('click', () => {
+				const target = this.currentPath;
+				const dir = options.snapshotDir;
+				this.hide();
+				if (target && dir) {
+					void this.commandService.executeCommand('axon.restoreCoworkSnapshot', target, dir);
+				}
+			});
+			bar.appendChild(restoreBtn);
+		}
+		wrap.appendChild(bar);
+
+		const header = mainWindow.document.createElement('div');
+		header.className = 'axon-preview-diff-header';
+		const h1 = mainWindow.document.createElement('span');
+		// allow-any-unicode-next-line
+		h1.textContent = '原稿';
+		const h2 = mainWindow.document.createElement('span');
+		// allow-any-unicode-next-line
+		h2.textContent = 'AI 修改后';
+		header.appendChild(h1);
+		header.appendChild(h2);
+		wrap.appendChild(header);
+
+		const body = mainWindow.document.createElement('div');
+		body.className = 'axon-preview-diff-body';
+		for (const row of rows) {
+			const line = mainWindow.document.createElement('div');
+			line.className = `axon-preview-diff-row axon-preview-diff-row--${row.type}`;
+			const left = mainWindow.document.createElement('span');
+			left.textContent = row.before ?? '';
+			const right = mainWindow.document.createElement('span');
+			right.textContent = row.after ?? '';
+			line.appendChild(left);
+			line.appendChild(right);
+			body.appendChild(line);
+		}
+		wrap.appendChild(body);
 		return wrap;
 	}
 
@@ -260,6 +397,87 @@ class AxonFilePreviewModalContribution extends Disposable {
 		this.blobUrls.push(url);
 		frame.src = url;
 		return frame;
+	}
+
+	/**
+	 * HTML 预览：用 VS Code 的 webview 承载，而不是 blob iframe。
+	 *
+	 * ── 为什么不能继续用 blob iframe ──
+	 * blob 文档会继承 workbench 页面的 CSP（script-src 'self' 'unsafe-eval' blob:，没有
+	 * 'unsafe-inline'）。实测：即使给 iframe 加上 allow-scripts，内联 <script> 仍被拦，
+	 * 外部 CDN 脚本也被拦。而 AI 生成的网页原型几乎全是内联脚本 + CDN 库，
+	 * 所以页面只能「看」不能「用」。要放开就得放宽整个 IDE 窗口的 CSP，代价不可接受。
+	 *
+	 * webview 是独立的 vscode-webview 源，有自己的 CSP（由我们在 HTML 里自己写），
+	 * 放宽只作用于这一个预览，不影响 workbench。
+	 *
+	 * ── 安全边界（改之前先读）──
+	 * 内容是模型刚生成的，按不可信代码对待：
+	 * · localResourceRoots 为空：读不到用户磁盘上的任何文件；
+	 * · connect-src 'none'：不能 fetch / XHR / WebSocket，页面里的数据只能是内联的。
+	 *   代价是要调真实接口的原型会失败，这是有意的取舍——预览是看效果，不是运行服务；
+	 * · form-action 'none' / frame-src 'none'：不能提交表单、不能嵌套外站页面；
+	 * · script-src / style-src / img-src / font-src 放行 https:，让 CDN 上的库
+	 *   （Tailwind、Chart.js、字体等）能正常加载——交互原型离不开它们。
+	 *   这意味着页面能向 CDN 发起请求，不能向任意接口发请求。
+	 */
+	private buildHtmlWebview(content: string, name: string): HTMLElement {
+		const wrap = mainWindow.document.createElement('div');
+		wrap.className = 'axon-preview-webview';
+
+		const store = new DisposableStore();
+		this.htmlWebviewDisposables = store;
+
+		const webview = store.add(this.webviewService.createWebviewElement({
+			title: name,
+			options: { disableServiceWorker: true },
+			contentOptions: { allowScripts: true, allowForms: false, localResourceRoots: [] },
+			extension: undefined,
+		}));
+		webview.mountTo(wrap, mainWindow);
+
+		// 链接点击：webview 默认只上报事件、什么都不做。只放行 http(s)，
+		// 挡掉 file: / command: 之类——产物里的链接不该能触发 IDE 命令或读本地文件。
+		store.add(webview.onDidClickLink((href) => {
+			try {
+				const scheme = href.slice(0, href.indexOf(':')).toLowerCase();
+				if (scheme === Schemas.http || scheme === Schemas.https) {
+					void this.openerService.open(href, { openExternal: true });
+				}
+			} catch {
+				// 链接解析失败就当没点
+			}
+		}));
+
+		webview.setHtml(this.wrapHtmlDocument(content));
+		return wrap;
+	}
+
+	/**
+	 * 给产物 HTML 套上 CSP。
+	 *
+	 * 注入到 <head> 最前面：meta CSP 对其后的内容生效；放在内容之前，
+	 * 才能保证产物自己写的 <meta> 或脚本没机会先于它执行。
+	 * 产物若不是完整文档（没有 <head>），就整体包进一个标准文档里。
+	 */
+	private wrapHtmlDocument(content: string): string {
+		const csp = [
+			`default-src 'none'`,
+			`script-src 'unsafe-inline' 'unsafe-eval' https:`,
+			`style-src 'unsafe-inline' https:`,
+			`img-src data: blob: https:`,
+			`font-src data: https:`,
+			`media-src data: blob: https:`,
+			`connect-src 'none'`,
+			`frame-src 'none'`,
+			`form-action 'none'`,
+		].join('; ');
+		const meta = `<meta http-equiv="Content-Security-Policy" content="${csp}">`;
+
+		if (/<head[\s>]/i.test(content)) {
+			return content.replace(/<head([^>]*)>/i, `<head$1>${meta}`);
+		}
+		return `<!doctype html><html><head><meta charset="utf-8">${meta}</head><body>${content}</body></html>`;
 	}
 
 	private buildImage(base64: string, mime: string | undefined, name: string): HTMLElement {
@@ -436,12 +654,18 @@ class AxonFilePreviewModalContribution extends Disposable {
 			this.keydownHandler = undefined;
 		}
 		this.releaseBlobUrls();
+		this.releaseHtmlWebview();
 		this.overlay?.remove();
 		this.overlay = undefined;
 		this.titleEl = undefined;
 		this.badgeEl = undefined;
 		this.bodyEl = undefined;
 		this.currentPath = undefined;
+	}
+
+	private releaseHtmlWebview(): void {
+		this.htmlWebviewDisposables?.dispose();
+		this.htmlWebviewDisposables = undefined;
 	}
 
 	private releaseBlobUrls(): void {

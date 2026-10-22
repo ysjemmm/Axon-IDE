@@ -77,6 +77,82 @@
 	flex: 0 0 auto;
 }
 
+/* ── Cowork 改动对比（diff 模式）────────────────────────────── */
+
+.axon-preview-diff {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 0;
+}
+
+.axon-preview-diff-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	padding: 8px 14px;
+	flex: 0 0 auto;
+	border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
+	font-size: 12px;
+	color: var(--vscode-foreground);
+}
+
+.axon-preview-diff-restore {
+	/* 恢复是破坏性操作（覆盖现文件），用警示色让用户多看一眼 */
+	border-color: var(--vscode-inputValidation-warningBorder, #b89500);
+	color: var(--vscode-inputValidation-warningForeground, var(--vscode-foreground));
+}
+
+.axon-preview-diff-header {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	flex: 0 0 auto;
+	padding: 6px 14px;
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--vscode-descriptionForeground, #888);
+	border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
+}
+
+.axon-preview-diff-body {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-size: 12px;
+	line-height: 1.6;
+}
+
+.axon-preview-diff-row {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+}
+
+.axon-preview-diff-row > span {
+	padding: 0 10px;
+	white-space: pre-wrap;
+	word-break: break-all;
+	min-width: 0;
+}
+
+.axon-preview-diff-row--same {
+	color: var(--vscode-descriptionForeground, #888);
+}
+
+.axon-preview-diff-row--changed {
+	background: var(--vscode-diffEditor-removedBackground, rgba(255, 0, 0, 0.12));
+}
+
+.axon-preview-diff-row--changed > span:last-child {
+	background: var(--vscode-diffEditor-insertedBackground, rgba(0, 180, 0, 0.12));
+}
+
+.axon-preview-diff-same {
+	padding: 40px 0;
+}
+
+
 .axon-preview-btn {
 	height: 26px;
 	padding: 0 10px;
@@ -163,6 +239,23 @@
 	border: 0;
 	/* 白底兜底：HTML/SVG 多数假设浅色背景，深色主题下直接透出会看不清内容 */
 	background: #ffffff;
+}
+
+/* HTML 预览：webview 铺满。webview 自己生成的 iframe 带 .webview 类，需要显式撑满容器 */
+.axon-preview-webview {
+	position: relative;
+	width: 100%;
+	height: 100%;
+	/* 与 .axon-preview-frame 同理：产物多半假设浅色底，深色主题下不能透出编辑器背景 */
+	background: #ffffff;
+}
+
+.axon-preview-webview > .webview {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	border: 0;
 }
 
 /* 图片：居中、不放大超过原始尺寸 */
