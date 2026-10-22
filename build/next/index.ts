@@ -864,6 +864,9 @@ ${tslib}`,
 			banner,
 			loader: {
 				'.ttf': 'file',
+				// Axon 的 UI/等宽字体以 woff2 随产品分发（见 vs/workbench/browser/media/style.css）。
+				// 少了这条，打包时 CSS 里的 url() 解析不到 loader，整个 bundle 直接失败。
+				'.woff2': 'file',
 				'.svg': 'file',
 				'.png': 'file',
 				'.sh': 'file',
