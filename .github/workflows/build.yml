@@ -94,6 +94,15 @@ jobs:
       # 只装桌面安装包用得到的依赖（见 build/npm/dirs.ts）
       AXON_DESKTOP_PACKAGE_ONLY: '1'
     steps:
+      # GitHub 的 Windows 构建机默认开着 Defender 实时扫描，npm install 解出的每个文件都要过一遍，
+      # 依赖安装、原生模块编译因此慢好几倍。构建机用完即销毁；关不掉也不影响构建（continue-on-error）。
+      - name: Disable Windows Defender real-time scanning
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true
+          Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE", "$env:RUNNER_TEMP", "$env:USERPROFILE"
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
