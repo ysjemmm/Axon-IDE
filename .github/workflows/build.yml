@@ -90,6 +90,9 @@ jobs:
     runs-on: windows-2025
     needs: prepare-release
     timeout-minutes: 120
+    env:
+      # 只装桌面安装包用得到的依赖（见 build/npm/dirs.ts）
+      AXON_DESKTOP_PACKAGE_ONLY: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -113,6 +116,9 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
+          # npm 下载缓存（~/.npm）：Axon 前端等每次 npm install 不用重新下载
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v3
@@ -122,13 +128,31 @@ jobs:
         with:
           python-version: '3.11'
 
+      # 依赖 + 原生模块编译产物缓存：lock 文件不变时，下面的 npm ci / 原生模块重编 / 扩展依赖安装
+      # （合计十几分钟）整段跳过。key 里带 lock 文件与安装脚本，任何一个变了都会重新装。
+      - name: Restore dependency cache
+        id: deps-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            build/node_modules
+            build/*/node_modules
+            build/npm/gyp/node_modules
+            extensions/node_modules
+            extensions/*/node_modules
+            extensions/*/server/node_modules
+          key: deps-win32-x64-v1-${{ hashFiles('package-lock.json', 'build/package-lock.json', 'build/*/package-lock.json', 'extensions/package-lock.json', 'extensions/*/package-lock.json', 'extensions/*/server/package-lock.json', '.npmrc', 'build/npm/dirs.ts', 'build/npm/postinstall.ts', 'build/npm/preinstall.ts') }}
+
       - name: Install dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: npm ci --ignore-scripts
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Ensure node-gyp is resolvable for node-pty
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           npm install -g node-gyp
@@ -138,6 +162,7 @@ jobs:
           ln -sf "$NODE_GYP" node_modules/node-pty/node_modules/.bin/node-gyp
 
       - name: Install tsgo native binary
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: npm rebuild @typescript/native-preview
         shell: bash
 
@@ -150,12 +175,14 @@ jobs:
           echo "VS2022_INSTALL=$vsPath" >> $env:GITHUB_ENV
 
       - name: Setup native build environment
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: node build/npm/preinstall.ts
         shell: bash
         env:
           vs2022_install: ${{ env.VS2022_INSTALL }}
 
       - name: Copy conpty DLLs into build/Release
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           # npm ci --ignore-scripts skips postinstall which copies
@@ -171,6 +198,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
 
       - name: Rebuild native addons for Electron (x64)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: |
           # @electron/rebuild --force wipes build/Release entirely, then only
           # rebuilds .node files via node-gyp. Prebuilt DLLs (conpty.dll) are lost.
@@ -189,6 +217,7 @@ jobs:
         shell: bash
 
       - name: Install extension dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: node build/npm/postinstall.ts
         shell: bash
         env:
@@ -196,6 +225,7 @@ jobs:
           npm_command: install
 
       - name: Verify and retry critical extension dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -250,6 +280,21 @@ jobs:
           else
             echo "All critical extensions have node_modules."
           fi
+
+      # 依赖装完、构建还没动 node_modules 之前存缓存（只在没命中时存）
+      - name: Save dependency cache
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            node_modules
+            build/node_modules
+            build/*/node_modules
+            build/npm/gyp/node_modules
+            extensions/node_modules
+            extensions/*/node_modules
+            extensions/*/server/node_modules
+          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
 
       - name: Build Axon extension bundle
         shell: bash
