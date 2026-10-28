@@ -27,6 +27,9 @@ OutputDir={#OutputDir}
 OutputBaseFilename=Axon-IDE-win32-x64-setup
 Compression=lzma2/ultra64
 SolidCompression=yes
+; LZMA2 多线程压缩（CI 机器 4 核）：打安装包从约 4.5 分钟降到 1~2 分钟，体积代价通常在 1%~3%
+LZMAUseSeparateProcess=yes
+LZMANumBlockThreads=4
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 WizardStyle=modern
