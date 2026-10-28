@@ -30,6 +30,30 @@
     "configuration": {
       "title": "Axon",
       "properties": {
+        "axon.marketplace.sources": {
+          "type": "array",
+          "default": [],
+          "scope": "window",
+          "markdownDescription": "团队 Skill / Power 仓库源。每个源是一个提供 `index.json` 索引的 HTTP(S) 地址，例如 `https://example.com/team-skills`。\n\n字段：\n- `name`：源名称（唯一，用于展示）\n- `url`：源根地址，必须 http/https\n- `description`：备注（可选）\n\n这与「从仓库安装」面板编辑的是同一份配置，两处修改会互相同步。",
+          "items": {
+            "type": "object",
+            "required": ["name", "url"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "源唯一名称（展示用）"
+              },
+              "url": {
+                "type": "string",
+                "description": "源根地址，必须 http/https"
+              },
+              "description": {
+                "type": "string",
+                "description": "备注说明（可选）"
+              }
+            }
+          }
+        },
         "axon.trustedCommands": {
           "type": "array",
           "items": {
@@ -44,6 +68,36 @@
           "default": true,
           "scope": "resource",
           "markdownDescription": "AI 主动感知总开关：开启后，终端报错和诊断变化（仅用户操作）会在侧栏显示 badge 通知。"
+        },
+        "axon.media.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "markdownDescription": "允许 AI 生成动画 / 视频（GIF、MP4，可带旁白）。\n\n关闭时该能力完全不可见：AI 拿不到对应工具，也不会占用磁盘或网络。\n\n开启后 Axon 会**自动下载渲染组件**（ffmpeg，约 160MB，仅一次），之后成片在本机离线生成，不调用任何第三方服务。\n\n做不到实拍镜头、人物口型、配乐与音效；声音只有系统语音合成的旁白。"
+        },
+        "axon.image.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "markdownDescription": "允许 AI 生成图片（PNG 文生图）。\n\n关闭时该能力完全不可见：AI 拿不到对应工具。\n\n开启后还需要填写下面的服务地址、API Key 与模型名才能真正出图。\n\n注意：画面由**外部生图服务**生成，会消耗该服务的额度；这与上面的「生成动画 / 视频」是两种不同能力——后者在本机离线渲染，不调用任何第三方服务。"
+        },
+        "axon.image.baseUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "markdownDescription": "生图服务接口地址（OpenAI 兼容协议），例如 `https://api.openai.com/v1`。留空表示未配置。"
+        },
+        "axon.image.apiKey": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "markdownDescription": "生图服务的 API Key。"
+        },
+        "axon.image.model": {
+          "type": "string",
+          "default": "gpt-image-1",
+          "scope": "window",
+          "markdownDescription": "生图模型名，例如 `gpt-image-1`、`dall-e-3`；具体支持哪些取决于服务商。"
         },
         "axon.proactiveAwareness.terminalErrors": {
           "type": "boolean",
@@ -118,6 +172,17 @@
           "minimum": 2,
           "scope": "resource",
           "markdownDescription": "压缩时保留最近多少条消息的原文不压缩。\n\n- **值越大**：AI 能看到更多近期原文上下文，理解更连贯；但上下文体积更大\n- **值越小**：压缩更激进，体积更小，但可能丢失近期上下文细节\n\n默认 8（约 3-4 轮完整对话）。"
+        },
+        "axon.compaction.autoCompactAt": {
+          "type": "string",
+          "enum": ["auto", "early"],
+          "enumDescriptions": [
+            "按模型窗口留出余量再压缩（128k≈75%、200k≈84%、1M≈85%）",
+            "用到窗口一半就压缩：回复更稳、单轮更省，代价是压缩更频繁"
+          ],
+          "default": "auto",
+          "scope": "resource",
+          "markdownDescription": "**自动压缩线**：上下文用到这条线时压缩早期对话。\n\n- **auto（默认）**：按窗口留出余量（窗口 15%，夹在 32k–160k），留给一次长回答继续读文件、跑命令\n- **early**：用到窗口一半就压缩。长上下文里模型对早期细节的召回会变差，每轮重发的上下文也更贵；更看重质量和成本时选它\n\n用户发消息前达到这条线会询问「压缩 / 迁移到新会话」；回答进行中越过则自动压缩（保留当前请求原文），不打断回答。"
         },
         "axon.creditBudget.enabled": {
           "type": "boolean",
@@ -390,6 +455,11 @@
         "title": "启用/禁用 Skill"
       },
       {
+        "command": "axon.skill.refresh",
+        "title": "刷新 Skills",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "axon.openPower",
         "title": "Axon: 打开 Power"
       },
@@ -433,6 +503,11 @@
         "command": "axon.power.import",
         "title": "导入 Power",
         "icon": "$(folder-opened)"
+      },
+      {
+        "command": "axon.power.refresh",
+        "title": "刷新 Powers",
+        "icon": "$(refresh)"
       },
       {
         "command": "axon.power.installFromMarketplace",
@@ -668,67 +743,72 @@
         {
           "command": "axon.skill.create",
           "when": "view == axon.customSkills",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "axon.skill.import",
           "when": "view == axon.customSkills",
-          "group": "navigation"
+          "group": "1_import@1"
         },
         {
           "command": "axon.skill.deleteBatch",
           "when": "view == axon.customSkills",
-          "group": "navigation"
+          "group": "2_maint@2"
+        },
+        {
+          "command": "axon.skill.refresh",
+          "when": "view == axon.customSkills",
+          "group": "2_maint@1"
         },
         {
           "command": "axon.skill.create",
           "when": "view == axon.skills",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "axon.skill.import",
           "when": "view == axon.skills",
-          "group": "navigation"
+          "group": "1_import@1"
         },
         {
           "command": "axon.skill.installFromMarketplace",
           "when": "view == axon.skills",
-          "group": "navigation"
-        },
-        {
-          "command": "axon.openMarketplaceManager",
-          "when": "view == axon.skills",
-          "group": "navigation"
+          "group": "1_import@2"
         },
         {
           "command": "axon.skill.deleteBatch",
           "when": "view == axon.skills",
-          "group": "navigation"
+          "group": "2_maint@2"
+        },
+        {
+          "command": "axon.skill.refresh",
+          "when": "view == axon.skills",
+          "group": "2_maint@1"
         },
         {
           "command": "axon.power.create",
           "when": "view == axon.powers",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "axon.power.import",
           "when": "view == axon.powers",
-          "group": "navigation"
+          "group": "1_import@1"
         },
         {
           "command": "axon.power.installFromMarketplace",
           "when": "view == axon.powers",
-          "group": "navigation"
+          "group": "1_import@2"
         },
         {
-          "command": "axon.openMarketplaceManager",
+          "command": "axon.power.refresh",
           "when": "view == axon.powers",
-          "group": "navigation"
+          "group": "2_maint@1"
         },
         {
           "command": "axon.openMcp",
           "when": "view == axon.powers",
-          "group": "navigation"
+          "group": "3_other@1"
         },
         {
           "command": "axon.mcp.refresh",
@@ -778,6 +858,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.95.0",
+    "esbuild": "0.24.2",
     "typescript": "^5.7.0"
   }
 }

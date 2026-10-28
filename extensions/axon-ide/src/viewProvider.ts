@@ -567,6 +567,16 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
       ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
       ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp", ".ico": "image/x-icon",
     };
+    const videoMime: Record<string, string> = { ".mp4": "video/mp4", ".webm": "video/webm" };
+    /**
+     * 视频预览的体积上限。
+     *
+     * 视频要经命令通道整段送进 workbench，再拼进预览页的 HTML 里 —— base64 本身膨胀 1/3，
+     * 等于同一个文件在内存里存在三份（原始 Buffer、base64 串、拼接后的 HTML）。
+     * 上限放太宽会把这三份一起放大，容易把 IPC 和渲染进程拖死，所以收到 12MB：
+     * 典型的 720p 十几秒成片在 1~3MB，够用；更大的请用系统播放器。
+     */
+    const MAX_VIDEO_BYTES = 12 * 1024 * 1024;
     const textExts = new Set([
       ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".json5", ".yaml", ".yml", ".xml",
       ".css", ".scss", ".less", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".svelte",
@@ -604,6 +614,16 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
 
       if ([".xls", ".doc", ".ppt"].includes(ext)) {
         await render({ kind: "unsupported", message: "旧版 Office 格式暂不支持预览，请另存为 xlsx、docx 或 pptx" });
+        return;
+      }
+
+      if (videoMime[ext]) {
+        if (stat.size > MAX_VIDEO_BYTES) {
+          await render({ kind: "unsupported", message: "视频文件过大，暂不支持在此预览，请用系统播放器打开" });
+          return;
+        }
+        const buf = await fs.readFile(filePath);
+        await render({ kind: "video", mime: videoMime[ext], content: buf.toString("base64") });
         return;
       }
 

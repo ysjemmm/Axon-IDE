@@ -26,7 +26,7 @@ import { IWebviewService } from '../../webview/browser/webview.js';
 const SHOW_FILE_PREVIEW_MODAL_COMMAND = 'axon.showFilePreviewModal';
 const UPDATE_FILE_PREVIEW_MODAL_COMMAND = 'axon.updateFilePreviewModal';
 
-type PreviewKind = 'html' | 'svg' | 'image' | 'pdf' | 'text' | 'office' | 'diff' | 'unsupported';
+type PreviewKind = 'html' | 'svg' | 'image' | 'video' | 'pdf' | 'text' | 'office' | 'diff' | 'unsupported';
 
 interface AxonFilePreviewOptions {
 	/** 展示用文件名 */
@@ -34,9 +34,9 @@ interface AxonFilePreviewOptions {
 	/** 绝对路径，用于「在编辑器中打开」 */
 	path?: string;
 	kind?: PreviewKind;
-	/** 文本/HTML/SVG 为原文；image/pdf 为 base64 */
+	/** 文本/HTML/SVG 为原文；image/video/pdf 为 base64 */
 	content?: string;
-	/** image 的 MIME */
+	/** image / video 的 MIME */
 	mime?: string;
 	/** 左上角类型角标，如 XLSX */
 	badge?: string;
@@ -115,6 +115,21 @@ class AxonFilePreviewModalContribution extends Disposable {
 		const actions = mainWindow.document.createElement('div');
 		actions.className = 'axon-preview-actions';
 		header.appendChild(actions);
+
+		// 在文件系统中打开：定位到该文件（产物目录里的成片常要被拷走 / 分享，
+		// 在编辑器里打开成二进制标签页对这类文件没意义）。
+		const revealBtn = mainWindow.document.createElement('button');
+		revealBtn.className = 'axon-preview-btn';
+		// allow-any-unicode-next-line
+		revealBtn.textContent = '在文件系统中打开';
+		revealBtn.addEventListener('click', () => {
+			const target = this.currentPath;
+			if (target) {
+				// 同样交回扩展：系统文件管理器定位是宿主侧能力，workbench 不直接碰
+				void this.commandService.executeCommand('axon.revealFileInOs', target);
+			}
+		});
+		actions.appendChild(revealBtn);
 
 		// 在编辑器中打开：预览只读，想改内容得回到真正的编辑器
 		const openBtn = mainWindow.document.createElement('button');
@@ -214,6 +229,9 @@ class AxonFilePreviewModalContribution extends Disposable {
 				return;
 			case 'image':
 				this.bodyEl.appendChild(this.buildImage(content, options?.mime, name));
+				return;
+			case 'video':
+				this.bodyEl.appendChild(this.buildVideo(content, options?.mime, name));
 				return;
 			case 'pdf':
 				this.bodyEl.appendChild(this.buildPdf(content, name));
@@ -488,6 +506,28 @@ class AxonFilePreviewModalContribution extends Disposable {
 		img.alt = name;
 		wrap.appendChild(img);
 		return wrap;
+	}
+
+	/**
+	 * 视频预览：借用 HTML webview 通道，把视频以 data URI 内嵌进一个只有 <video> 的页面。
+	 *
+	 * 不能直接在 workbench 里放 <video>：workbench 的 CSP 是 media-src 'self'，
+	 * 既不放行 blob: 也不放行 data:（PDF 靠 frame-src 里的 blob: 才行，媒体没有对应放行）。
+	 * 放宽整个 IDE 窗口的 CSP 代价不可接受，而 HTML 预览用的 webview 有自己独立的 CSP，
+	 * 其中 media-src 已含 data:/blob:（见 wrapHtmlDocument），不用动任何安全策略。
+	 *
+	 * mime 只放行白名单里的两种，避免把任意字符串拼进 HTML 属性。
+	 */
+	private buildVideo(base64: string, mime: string | undefined, name: string): HTMLElement {
+		const safeMime = mime === 'video/webm' ? 'video/webm' : 'video/mp4';
+		// base64 字符集只有 [A-Za-z0-9+/=]，这里再过滤一遍，确保拼进 HTML 的内容不可能带出标签或引号
+		const safeData = base64.replace(/[^A-Za-z0-9+/=]/g, '');
+		const html = `<!doctype html><html><head><meta charset="utf-8"><style>` +
+			`html,body{margin:0;height:100%;background:#000;display:flex;align-items:center;justify-content:center}` +
+			`video{max-width:100%;max-height:100%}</style></head><body>` +
+			`<video controls autoplay loop playsinline src="data:${safeMime};base64,${safeData}"></video>` +
+			`</body></html>`;
+		return this.buildHtmlWebview(html, name);
 	}
 
 	/**
