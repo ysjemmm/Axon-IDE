@@ -298,8 +298,9 @@ jobs:
             exit 1
           }
 
+      # -min：官方发布用的压缩构建（esbuild minify，无 mangling），out/ 约 86MB -> 35MB，功能不变
       - name: Build & Package
-        run: npm run gulp vscode-win32-x64
+        run: npm run gulp vscode-win32-x64-min
         shell: bash
 
       - name: Copy Axon extension into packaged app
@@ -530,8 +531,9 @@ jobs:
         run: |
           test -f extensions/axon-ide/dist/extension.js || (echo "Missing extensions/axon-ide/dist/extension.js" && exit 1)
 
+      # -min：官方发布用的压缩构建（esbuild minify，无 mangling），out/ 约 86MB -> 35MB，功能不变
       - name: Build & Package
-        run: npm run gulp vscode-darwin-arm64
+        run: npm run gulp vscode-darwin-arm64-min
 
       - name: Copy Axon extension into packaged app
         run: |
@@ -661,7 +663,7 @@ jobs:
           npm_command: install
 
       - name: Build & Package
-        run: npm run gulp vscode-darwin-x64
+        run: npm run gulp vscode-darwin-x64-min
 
       # 必须在签名之前：删 Electron Framework 里的语言包会改动被签名的文件
       - name: Slim packaged app
