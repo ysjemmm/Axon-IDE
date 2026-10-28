@@ -32,6 +32,12 @@ PrivilegesRequired=lowest
 WizardStyle=modern
 AllowNoIcons=yes
 UninstallDisplayName={#AppName}
+; 自动更新（updateService.axon.ts 以 /silent 运行本安装包）时，旧进程可能还没完全退出：
+; 让 Restart Manager 检测并关掉占用文件的进程，graceful 关不掉就强制关，避免覆盖到一半静默失败、
+; 下次启动加载的仍是旧文件。默认过滤只看 *.exe,*.dll,*.chm，补上原生模块 .node 与 .asar。
+CloseApplications=force
+CloseApplicationsFilter=*.exe,*.dll,*.node,*.asar
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -48,3 +54,6 @@ Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "启动 Axon IDE"; Flags: nowait postinstall skipifsilent
+; 自动更新走的是静默安装，上一行被 skipifsilent 跳过——点了「重启以更新」后应用关掉就再也没起来，
+; 用户只能自己去点快捷方式。静默安装时直接把新装好的这份拉起来。
+Filename: "{app}\{#AppExeName}"; Flags: nowait; Check: WizardSilent

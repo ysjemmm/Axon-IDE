@@ -129,6 +129,30 @@ const LAST_DOWNLOADED_PACKAGE_FILE = 'last-downloaded-package.txt';
 /** 下载进行中标记（记录 {url,targetPath}，重启后可识别中断的下载并清理） */
 const LAST_DOWNLOADING_PACKAGE_FILE = 'last-downloading-package.txt';
 
+/**
+ * 最近一次「退出并安装」的记录（位于用户数据目录）。
+ *
+ * 「更新后重启又回到旧版本」这类问题验证代价极高：要真的走一遍下载、安装、重启。
+ * 所以每次安装前留一条记录，下次启动时自检——版本没升上去、或者这次启动的根本不是被更新的那份
+ * 安装，就立刻在标题栏的更新提示里说清楚，并写进日志。之后每一次真实用户的更新都在替我们验证。
+ */
+const LAST_INSTALL_ATTEMPT_FILE = 'last-install-attempt.json';
+
+interface IInstallAttempt {
+	/** 要装上的版本 */
+	targetVersion: string;
+	/** 安装前的版本 */
+	fromVersion: string;
+	/** 安装前正在运行的可执行文件：下次启动若换了路径，说明启动的是另一份安装 */
+	execPath: string;
+	/** 被覆盖的安装位置（Windows 为安装目录，macOS 为 .app 包） */
+	installTarget: string;
+	/** 安装日志 */
+	logPath?: string;
+	platform: string;
+	at: string;
+}
+
 export class AxonUpdateService extends Disposable implements IUpdateService {
 
 	declare readonly _serviceBrand: undefined;
@@ -183,8 +207,14 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 
 		this.setState(State.Idle(UpdateType.Setup));
 
+		// 先自检上一次安装是否真的生效；失败时把原因挂在更新提示上，这次不再静默恢复 Ready
+		// （否则标题栏只剩一个「更新」按钮，用户不知道上一次其实没装上）
+		const lastInstallFailed = await this.verifyLastInstall();
+
 		// 启动时检查是否有上次下载待安装的包，有则直接恢复 Ready 状态
-		await this.tryRecoverDownloadedPackage();
+		if (!lastInstallFailed) {
+			await this.tryRecoverDownloadedPackage();
+		}
 
 		// Auto-check 30s after startup (unless manual mode)
 		if (updateMode !== 'manual') {
@@ -439,22 +469,33 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 		this.logService.info(`axon-update#quitAndInstall - launching: ${pkgPath}`);
 
 		const platform = process.platform;
+		const readyUpdate = this._state.type === StateType.Ready ? this._state.update : undefined;
+		const targetVersion = readyUpdate?.productVersion ?? this.getCachedDownloadedPackage()?.version ?? '';
+		const logPath = path.join(path.dirname(pkgPath), `install-${targetVersion || 'unknown'}.log`);
 
 		if (platform === 'win32') {
 			// Windows: silent Inno Setup installer.
 			//
 			// ⚠️ 修复记录（用户反馈：关闭重开后又回到旧版本）：
-			// 之前这里带了 /nocloseapplications，并且 spawn 完立刻同步调用 quit(true)。
-			// /nocloseapplications 会让 Inno Setup 跳过"检测并等待目标进程退出"这一步，
-			// 直接尝试覆盖文件；而 quit(true) 到进程真正退出、文件锁真正释放之间存在时间差。
-			// 两者叠加就是纯竞态：安装器可能在旧进程还占用着主 exe/dll 时就去写文件，
-			// /silent 模式下这类覆盖失败是静默的（不弹错误），结果就是"装了个寂寞"——
-			// 部分文件没换成功，下次启动加载的仍是旧版本可执行文件。
-			//
-			// 修复：去掉 /nocloseapplications，改回官方 Win32UpdateService 的做法——
-			// 让 Inno Setup 自己内置的进程检测/等待机制负责"等旧进程真正退出再覆盖"，
-			// 应用这边不再用参数去关掉这层保护。
-			const installer = spawn(pkgPath, ['/silent', '/log', '/mergetasks=runcode,!desktopicon,!quicklaunchicon'], {
+			// ① 早先带了 /nocloseapplications，并且 spawn 完立刻同步调用 quit(true)：
+			//    安装器可能在旧进程还占用着主 exe/dll 时就去写文件，/silent 下覆盖失败是静默的。
+			//    现在交给 Inno Setup 自己的进程检测/等待（脚本里 CloseApplications=force）。
+			// ② 没有指定 /DIR：安装位置全靠 Inno 去注册表找上一次的记录。PrivilegesRequired=lowest
+			//    下更新安装器以普通用户运行，只查 HKCU；首次若是以管理员身份装到 Program Files
+			//    （记录在 HKLM），就找不到，转而在 %LOCALAPPDATA%\Programs 另装一份——新版装上了，
+			//    任务栏固定的、桌面上的快捷方式却还指向旧的那份，表现就是「重启后又回到旧版本」。
+			//    现在显式指定为【当前正在运行的这份】的目录，更新只可能覆盖它。
+			// ③ /mergetasks 里的 runcode / quicklaunchicon 是官方脚本的任务，axon-ide.iss 没有，去掉；
+			//    装完自动重启改由脚本的 [Run]（Check: WizardSilent）负责。
+			const installDir = path.dirname(process.execPath);
+			const args = ['/silent', `/LOG=${logPath}`, '/mergetasks=!desktopicon'];
+			// 开发态的 execPath 是 .build 下的 electron，不能当安装目录
+			if (this.environmentMainService.isBuilt) {
+				args.push(`/DIR=${installDir}`);
+			}
+			await this.saveInstallAttempt({ targetVersion, installTarget: installDir, logPath });
+
+			const installer = spawn(pkgPath, args, {
 				detached: true,
 				stdio: ['ignore', 'ignore', 'ignore'],
 				env: { ...process.env, __COMPAT_LAYER: 'RunAsInvoker' },
@@ -467,21 +508,33 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 			installer.once('error', (err) => {
 				installerFailed = true;
 				this.logService.error('axon-update#quitAndInstall - failed to spawn installer', err);
+				void this.clearInstallAttempt();
 				this.setState(State.Idle(UpdateType.Setup, 'Failed to launch installer'));
 			});
 
 			// 给 installer 的 error 事件一点时间冒出来再决定是否退出：spawn 是异步的，
 			// 紧接着同步 quit 会让上面这个 error 监听器完全来不及生效。
-			// 这里不是在"赌安装器已经接管文件"（那是 Inno Setup 自己的职责），
-			// 只是确保"进程确实起来了"这个前提成立后才退出当前应用。
 			setTimeout(() => {
-				if (installerFailed) return;
-				this.logService.info('axon-update#quitAndInstall - installer launched, quitting now');
+				if (installerFailed) {
+					return;
+				}
+				this.logService.info(`axon-update#quitAndInstall - installer launched (dir=${installDir}, log=${logPath}), quitting now`);
 				this.lifecycleMainService.quit(true);
 			}, 300);
 			return;
 		} else if (platform === 'darwin') {
-			// macOS: open the dmg for the user to drag-install
+			// macOS：早先只是 `open` 打开 dmg 就退出，拖进「应用程序」全靠用户。最常见的结果是用户直接在
+			// dmg 窗口里双击打开——跑的是挂载卷上的新版，看起来更新成功了；dmg 一卸载、下次从 Dock 启动，
+			// 打开的还是 /Applications 里那份从没被替换的旧版。现在自动替换当前这份 .app 再重启。
+			const bundle = this.currentMacAppBundle();
+			if (bundle && this.canReplace(bundle)) {
+				await this.saveInstallAttempt({ targetVersion, installTarget: bundle, logPath });
+				this.launchMacInstaller(pkgPath, bundle, logPath);
+				this.lifecycleMainService.quit(true);
+				return;
+			}
+			// 不能自动替换（开发态、在 dmg 里运行、目录没有写权限）：退回让用户手动拖拽
+			this.logService.warn(`axon-update#quitAndInstall - cannot replace app bundle automatically (bundle=${bundle ?? 'unknown'}), opening package`);
 			spawn('open', [pkgPath], { detached: true, stdio: 'ignore' });
 		} else {
 			// Linux: open the download directory
@@ -490,6 +543,77 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 
 		// Quit the current application
 		this.lifecycleMainService.quit(true);
+	}
+
+	/** 当前运行的 .app 包路径（…/Axon IDE.app）；开发态或不在 .app 里运行时返回 undefined */
+	private currentMacAppBundle(): string | undefined {
+		if (!this.environmentMainService.isBuilt) {
+			return undefined;
+		}
+		const match = /^(.+?\.app)\/Contents\//.exec(process.execPath);
+		if (!match) {
+			return undefined;
+		}
+		// 在 dmg 挂载卷里运行：那里只读，也不是用户以后会启动的位置，装到「应用程序」
+		if (match[1].startsWith('/Volumes/')) {
+			return path.join('/Applications', path.basename(match[1]));
+		}
+		return match[1];
+	}
+
+	/** .app 所在目录可写，才能原地替换 */
+	private canReplace(bundle: string): boolean {
+		try {
+			const fs = require('fs') as typeof import('fs');
+			fs.accessSync(path.dirname(bundle), fs.constants.W_OK);
+			if (existsSync(bundle)) {
+				fs.accessSync(bundle, fs.constants.W_OK);
+			}
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * 起一个脱离本进程的 shell：等本进程退出 → 挂载 dmg（或解压 zip）→ 复制出新 .app →
+	 * 与旧包原子交换 → 重新打开。任何一步失败都退回「打开安装包让用户手动拖拽」，并保留旧版。
+	 * 输出写进 logPath，下次启动自检失败时会提示这个路径。
+	 */
+	private launchMacInstaller(pkgPath: string, bundle: string, logPath: string): void {
+		const script = [
+			'PID="$1"; PKG="$2"; TARGET="$3"; LOG="$4"',
+			'exec >>"$LOG" 2>&1',
+			'echo "[axon-update] $(date) install $PKG -> $TARGET"',
+			'while kill -0 "$PID" 2>/dev/null; do sleep 0.5; done',
+			'fail() { echo "[axon-update] FAILED: $1"; [ -n "$MNT" ] && hdiutil detach "$MNT" -force >/dev/null 2>&1; rm -rf "$TARGET.axon-new"; open "$PKG"; exit 1; }',
+			'WORK=$(mktemp -d /tmp/axon-update.XXXXXX) || fail "mktemp"',
+			'MNT=""',
+			'case "$PKG" in',
+			'  *.zip) ditto -x -k "$PKG" "$WORK" || fail "unzip"; SRCDIR="$WORK" ;;',
+			'  *) hdiutil attach -nobrowse -noautoopen -readonly -mountpoint "$WORK" "$PKG" || fail "attach"; MNT="$WORK"; SRCDIR="$WORK" ;;',
+			'esac',
+			'SRC=$(find "$SRCDIR" -maxdepth 2 -name "*.app" -type d | head -n 1)',
+			'[ -n "$SRC" ] || fail "no .app in package"',
+			'rm -rf "$TARGET.axon-new"',
+			'ditto "$SRC" "$TARGET.axon-new" || fail "copy"',
+			'[ -n "$MNT" ] && hdiutil detach "$MNT" -force',
+			'MNT=""',
+			'rm -rf "$TARGET.axon-old"',
+			'if [ -d "$TARGET" ]; then mv "$TARGET" "$TARGET.axon-old" || fail "move old"; fi',
+			'if ! mv "$TARGET.axon-new" "$TARGET"; then [ -d "$TARGET.axon-old" ] && mv "$TARGET.axon-old" "$TARGET"; fail "swap"; fi',
+			'rm -rf "$TARGET.axon-old" "$WORK"',
+			'xattr -dr com.apple.quarantine "$TARGET" 2>/dev/null',
+			'echo "[axon-update] done, relaunching"',
+			'open "$TARGET"',
+		].join('\n');
+		// 参数走位置参数而不是拼进脚本：路径里的空格、引号都不用转义
+		const child = spawn('/bin/sh', ['-c', script, 'axon-update', String(process.pid), pkgPath, bundle, logPath], {
+			detached: true,
+			stdio: 'ignore',
+		});
+		child.unref();
+		this.logService.info(`axon-update#quitAndInstall - mac installer started (target=${bundle}, log=${logPath})`);
 	}
 
 	async isLatestVersion(): Promise<boolean | undefined> {
@@ -559,6 +683,81 @@ export class AxonUpdateService extends Disposable implements IUpdateService {
 				await fs.unlink(p);
 			}
 		} catch { /* ignore */ }
+	}
+
+	// ── 安装自检 ──
+
+	private getInstallAttemptPath(): string {
+		return path.join(this.environmentMainService.userDataPath, LAST_INSTALL_ATTEMPT_FILE);
+	}
+
+	private async saveInstallAttempt(params: { targetVersion: string; installTarget: string; logPath?: string }): Promise<void> {
+		const record: IInstallAttempt = {
+			...params,
+			fromVersion: this.productService.version,
+			execPath: process.execPath,
+			platform: process.platform,
+			at: new Date().toISOString(),
+		};
+		try {
+			await writeFile(this.getInstallAttemptPath(), JSON.stringify(record), 'utf-8');
+		} catch (err) {
+			this.logService.error('axon-update#saveInstallAttempt - failed', err);
+		}
+	}
+
+	private async clearInstallAttempt(): Promise<void> {
+		try {
+			const p = this.getInstallAttemptPath();
+			if (existsSync(p)) {
+				const fs = require('fs/promises');
+				await fs.unlink(p);
+			}
+		} catch { /* ignore */ }
+	}
+
+	/**
+	 * 启动自检：上一次「退出并安装」之后，这次启动的是不是新版本、是不是同一份安装。
+	 * 记录只用一次（读完即删），结果写进日志；失败时设成带错误信息的 Idle，标题栏会弹出提示。
+	 * @returns 上一次安装是否失败
+	 */
+	private async verifyLastInstall(): Promise<boolean> {
+		let record: IInstallAttempt | undefined;
+		try {
+			const p = this.getInstallAttemptPath();
+			if (!existsSync(p)) {
+				return false;
+			}
+			record = JSON.parse(require('fs').readFileSync(p, 'utf-8')) as IInstallAttempt;
+		} catch (err) {
+			this.logService.warn(`axon-update#verifyLastInstall - unreadable record: ${(err as Error).message}`);
+		}
+		await this.clearInstallAttempt();
+		if (!record?.targetVersion) {
+			return false;
+		}
+
+		const current = this.productService.version;
+		const samePath = process.platform === 'win32'
+			? record.execPath.toLowerCase() === process.execPath.toLowerCase()
+			: record.execPath === process.execPath;
+		const upgraded = compareVersions(current, record.targetVersion) >= 0;
+		this.logService.info(`axon-update#verifyLastInstall - target=${record.targetVersion} from=${record.fromVersion} current=${current} upgraded=${upgraded} samePath=${samePath} execPath=${process.execPath} previousExecPath=${record.execPath} log=${record.logPath ?? '-'}`);
+
+		if (upgraded) {
+			if (!samePath) {
+				// 新版本跑起来了，但不是在原来那份安装上：旧的那份多半还在，快捷方式可能还指着它
+				this.logService.warn(`axon-update#verifyLastInstall - upgraded, but running from a different location than before (${record.execPath} -> ${process.execPath}); an old copy may still exist`);
+			}
+			return false;
+		}
+
+		const message = samePath
+			? `Update to ${record.targetVersion} did not take effect: still running ${current}.${record.logPath ? ` Installer log: ${record.logPath}` : ''}`
+			: `Update to ${record.targetVersion} was installed to ${record.installTarget}, but this launch started another copy at ${process.execPath} (${current}). Launch Axon IDE from the updated location or remove the old copy.`;
+		this.logService.error(`axon-update#verifyLastInstall - FAILED: ${message}`);
+		this.setState(State.Idle(UpdateType.Setup, message));
+		return true;
 	}
 
 	// ── 下载进度标记（识别中断的下载） ──
