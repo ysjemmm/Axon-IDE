@@ -324,6 +324,13 @@ jobs:
           $conpty = Join-Path $appDir "resources\app\node_modules\node-pty\build\Release\conpty\conpty.dll"
           if (Test-Path $conpty) { Write-Host "OK: conpty.dll" } else { Write-Error "MISSING: conpty.dll — terminal will fail"; exit 1 }
 
+      # 删掉用户用不到的文件（source map、其他平台/架构的原生二进制、中英文以外的 Chromium 语言包），见脚本注释
+      - name: Slim packaged app
+        shell: bash
+        run: |
+          app_dir="$(dirname "$PWD")/VSCode-win32-x64"
+          bash build/axon/slim-package.sh "$app_dir" "$app_dir/resources/app" win32 x64
+
       - name: Create portable zip
         shell: pwsh
         run: |
@@ -528,7 +535,9 @@ jobs:
 
       - name: Copy Axon extension into packaged app
         run: |
-          app_ext="$(dirname "$PWD")/VSCode-darwin-arm64/resources/app/extensions/axon-ide"
+          # macOS 的应用资源在 .app 包里；早先写成 Windows 的 resources/app，拷到了包外面，
+          # 白白在 portable zip 里多出一份 85MB 的顶层 resources/
+          app_ext="$(dirname "$PWD")/VSCode-darwin-arm64/Axon IDE.app/Contents/Resources/app/extensions/axon-ide"
           mkdir -p "$app_ext"
           cp -R extensions/axon-ide/dist "$app_ext/"
           cp extensions/axon-ide/package.json "$app_ext/"
@@ -537,8 +546,14 @@ jobs:
       - name: Verify packaged Axon extension
         run: |
           app_dir="$(dirname "$PWD")/VSCode-darwin-arm64"
-          extension_js="$app_dir/resources/app/extensions/axon-ide/dist/extension.js"
+          extension_js="$app_dir/Axon IDE.app/Contents/Resources/app/extensions/axon-ide/dist/extension.js"
           test -f "$extension_js" || (echo "Packaged Axon extension is missing: $extension_js" && exit 1)
+
+      # 必须在签名之前：删 Electron Framework 里的语言包会改动被签名的文件
+      - name: Slim packaged app
+        run: |
+          app_dir="$(dirname "$PWD")/VSCode-darwin-arm64"
+          bash build/axon/slim-package.sh "$app_dir" "$app_dir/Axon IDE.app/Contents/Resources/app" darwin arm64
 
       - name: Ad-hoc sign (arm64)
         run: |
@@ -553,7 +568,9 @@ jobs:
           src=$(dirname "$PWD")/VSCode-darwin-arm64
           dst="$PWD/.build/Axon-IDE-darwin-arm64-portable.zip"
           mkdir -p "$PWD/.build"
-          cd "$src" && zip -r "$dst" .
+          # ditto 保留 .framework 里的符号链接与签名。早先 zip -r 会把符号链接展开成实体文件，
+          # Electron Framework 被存了 3~4 份（zip 里 800MB），解压后签名也对不上
+          cd "$src" && ditto -c -k --sequesterRsrc --keepParent "Axon IDE.app" "$dst"
           echo "Portable zip: $dst ($(stat -f%z "$dst") bytes)"
 
       - name: Create DMG installer
@@ -646,6 +663,12 @@ jobs:
       - name: Build & Package
         run: npm run gulp vscode-darwin-x64
 
+      # 必须在签名之前：删 Electron Framework 里的语言包会改动被签名的文件
+      - name: Slim packaged app
+        run: |
+          app_dir="$(dirname "$PWD")/VSCode-darwin-x64"
+          bash build/axon/slim-package.sh "$app_dir" "$app_dir/Axon IDE.app/Contents/Resources/app" darwin x64
+
       - name: Ad-hoc sign (x64)
         run: |
           APP="$(dirname "$PWD")/VSCode-darwin-x64/Axon IDE.app"
@@ -659,7 +682,9 @@ jobs:
           src=$(dirname "$PWD")/VSCode-darwin-x64
           dst="$PWD/.build/Axon-IDE-darwin-x64-portable.zip"
           mkdir -p "$PWD/.build"
-          cd "$src" && zip -r "$dst" .
+          # ditto 保留 .framework 里的符号链接与签名。早先 zip -r 会把符号链接展开成实体文件，
+          # Electron Framework 被存了 3~4 份（zip 里 800MB），解压后签名也对不上
+          cd "$src" && ditto -c -k --sequesterRsrc --keepParent "Axon IDE.app" "$dst"
           echo "Portable zip: $dst ($(stat -f%z "$dst") bytes)"
 
       - name: Create DMG installer
