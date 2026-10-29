@@ -24,7 +24,14 @@
     "vscode": "^1.95.0"
   },
   "categories": ["AI", "Programming Languages", "Other"],
-  "activationEvents": ["*"],
+  "activationEvents": ["onStartupFinished"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "未信任的工作区里，工作区设置中的命令信任白名单（axon.trustedCommands）与插件市场来源不生效。",
+      "restrictedConfigurations": ["axon.trustedCommands", "axon.marketplace.sources"]
+    }
+  },
   "main": "./dist/extension.js",
   "contributes": {
     "configuration": {
@@ -243,6 +250,21 @@
           "scope": "resource",
           "markdownDescription": "**生成 Wiki 使用的模型**。留空表示沿用当前会话模型。\n\n默认跟随会话是有意的：Wiki 跑得少、但要读懂代码，沿用用户已经选定并认可的模型最稳妥。只有想为它单独指定（例如大仓库用更强的、或想省钱用便宜的）时才需要填。\n\n⚠️ 与内联补全刻意相反——那个跑得太频繁，默认要挑最便宜的。"
         },
+        "axon.wiki.tokenBudget": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "scope": "resource",
+          "markdownDescription": "**单次生成的 token 上限**（输入 + 输出累计）。达到上限就停下，已写好的页面保留，下次点击接着写剩下的。\n\n0 表示按页数自动估算（规划约 120 万 + 每页约 60 万）。每个子任务另有自己的轮次和 token 上限，防止某一页把预算烧光。"
+        },
+        "axon.wiki.indexMaxChars": {
+          "type": "number",
+          "default": 1200,
+          "minimum": 300,
+          "maximum": 8000,
+          "scope": "resource",
+          "markdownDescription": "**每轮注入给 AI 的 Wiki 目录字数上限**。\n\n每次对话时，Axon 会把项目 Wiki 的「标题 + 一句话摘要」目录随请求发给 AI，让它知道有哪些页面可以查（正文不发，需要时 AI 自己去读）。目录按 概览 → 架构 → 领域 → 功能 → 约定 排序，超出上限的页面不列出。\n\n- **调大**：AI 一眼能看到更多页面，但每轮请求都多带这些字（花费随之增加）\n- **调小**：更省，但靠后的页面 AI 要自己去目录里找\n\n默认 1200，约能列出 20 页左右。"
+        },
         "axon.wiki.maxPages": {
           "type": "number",
           "default": 15,
@@ -344,6 +366,11 @@
         "enablement": "axon.chatMode != agent"
       },
       {
+        "command": "axon.connectors",
+        "title": "Axon: 连接器",
+        "icon": "$(plug)"
+      },
+      {
         "command": "axon.coworkMode",
         "title": "Axon: Cowork 模式",
         "icon": "$(table)",
@@ -399,6 +426,21 @@
         "command": "axon.wiki.deletePage",
         "title": "删除页面",
         "icon": "$(trash)"
+      },
+      {
+        "command": "axon.wiki.regeneratePage",
+        "title": "重新生成此页",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "axon.wiki.markReviewed",
+        "title": "标记为已复核（内容仍准确）",
+        "icon": "$(check)"
+      },
+      {
+        "command": "axon.wiki.refreshStale",
+        "title": "重写待复核的页面",
+        "icon": "$(sync)"
       },
       {
         "command": "axon.wiki.deleteJob",
@@ -596,6 +638,26 @@
           "command": "axon.deleteRelay",
           "when": "viewItem == relayItem",
           "group": "inline"
+        },
+        {
+          "command": "axon.wiki.markReviewed",
+          "when": "viewItem == wikiPageStale",
+          "group": "inline"
+        },
+        {
+          "command": "axon.wiki.markReviewed",
+          "when": "viewItem == wikiPageStale",
+          "group": "1_wiki@1"
+        },
+        {
+          "command": "axon.wiki.regeneratePage",
+          "when": "viewItem =~ /^wikiPage/ && !axon.wikiGenerating",
+          "group": "1_wiki@2"
+        },
+        {
+          "command": "axon.wiki.refreshStale",
+          "when": "viewItem == wikiWorkspace && !axon.wikiGenerating",
+          "group": "1_wiki@1"
         },
         {
           "command": "axon.wiki.deletePage",

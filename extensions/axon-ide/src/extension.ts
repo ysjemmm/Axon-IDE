@@ -11,13 +11,15 @@
  * 因此 loadProviderEnv() 只需在"用户发第一条消息"之前执行即可——activate 里调一次足矣。
  */
 
+import { stopRecording } from "./voiceInput.js";
 import * as vscode from "vscode";
 import { homedir } from "node:os";
 import { join, basename, dirname } from "node:path";
+import { readJsonConfig, writeJsonConfig } from "./safeConfigFile.js";
 import { SessionHub, type ControlCommand, type WorkspaceGroup, type CompactionUserConfig, type CreditBudgetUserConfig, webSearch, webFetch, setBuiltinPowersDir } from "@axon/core";
 import { DEFAULT_COMPACTION_CONFIG, DEFAULT_CREDIT_BUDGET_CONFIG, DEFAULT_TRACE_CONFIG, type TraceConfig } from "@axon/core";
 import { createVSCodeAgentHost, VSCodeCommandTrustStore } from "@axon/host-vscode";
-import { JsonFileStorage, createNodeMcpCapability, ensureFfmpeg, findFfmpeg, setMediaVendorDir, setImageProviderConfig } from "@axon/host-node";
+import { JsonFileStorage, closeAllBrowsers, createNodeMcpCapability, ensureFfmpeg, findFfmpeg, setMediaVendorDir, setImageProviderConfig } from "@axon/host-node";
 import type { ImageProviderConfig } from "@axon/host-node";
 import { loadProviderEnv } from "./loadEnv.js";
 import { VSCodeChannel } from "./vscodeChannel.js";
@@ -105,12 +107,15 @@ function readTraceConfig(): Partial<TraceConfig> {
  * 侧栏按钮不属于任何对话面板，没有天然的「当前会话模型」；而它是本项目里最贵的单个操作
  * （多页 × 每页多轮工具调用）。最贵的操作，配置不该靠猜。
  */
-function readWikiConfig(): { provider: string; model: string; maxPages: number } {
+function readWikiConfig(): { provider: string; model: string; maxPages: number; tokenBudget?: number } {
   const cfg = vscode.workspace.getConfiguration("axon.wiki");
+  // 0 / 未填 = 按页数自动估算（见 core 的 defaultWikiTokenBudget）
+  const budget = cfg.get<number>("tokenBudget", 0);
   return {
     provider: cfg.get<string>("provider", "") || "",
     model: cfg.get<string>("model", "") || "",
     maxPages: cfg.get<number>("maxPages", 15),
+    ...(budget > 0 ? { tokenBudget: budget } : {}),
   };
 }
 
@@ -797,7 +802,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // 带上「已有多少页 / 是否有未完成作业」：选工作区时这正是判断依据，用户不必先去列表里翻。
     // 探测失败不阻塞选择本身 —— 选择框的价值在于让用户拍板，不在于这些附加信息。
-    const pages = await store.summary().catch(() => []);
+    const pages = await store.summary().catch((err: unknown) => {
+      // 不阻塞选择，但要留下线索：页数显示成「尚未生成」可能只是读取失败
+      console.warn("[wiki] 读取已有页面失败：", (err as Error)?.message);
+      return [];
+    });
     const countByWs = new Map<string, number>();
     for (const p of pages) countByWs.set(p.workspace, (countByWs.get(p.workspace) ?? 0) + 1);
 
@@ -871,11 +880,22 @@ export function activate(context: vscode.ExtensionContext): void {
    */
   let wikiGenerating = false;
 
+  /** 各页面依据文件的绝对路径（规整后的键），由 refreshWikiTree 维护 */
+  let wikiSourcePaths = new Set<string>();
+  // 依据文件监听器的状态（见 rewatchWikiSources）。声明在 refreshWikiTree 之前：它可能在激活早期就被调用
+  let wikiSourceWatchers: vscode.Disposable[] = [];
+  let wikiWatchKey = "";
+  let wikiSourceTimer: ReturnType<typeof setTimeout> | undefined;
+  const normPathKey = (p: string): string => p.replace(/\\/g, "/").toLowerCase();
+
   async function refreshWikiTree(): Promise<number> {
     const { WikiStore } = await import("@axon/core");
     const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
     const store = new WikiStore(allWorkspaces, createHost());
     const pages = await store.summary();
+    // 记下所有页面的依据文件：它们一改，侧边栏的「待复核」就要跟着变（见下方 wikiSourceWatcher）
+    wikiSourcePaths = new Set(pages.flatMap((p: { workspace: string; sources: string[] }) => p.sources.map((src: string) => normPathKey(join(p.workspace, src)))));
+    rewatchWikiSources(pages);
     const staleCount = wikiTree.refresh(pages);
     wikiView.badge = staleCount > 0
       ? { value: staleCount, tooltip: `${staleCount} 个 Wiki 页面可能已过时` }
@@ -890,6 +910,38 @@ export function activate(context: vscode.ExtensionContext): void {
     return staleCount;
   }
 
+  /**
+   * 跑一次 Wiki 生成（整体 / 只刷新待复核 / 只重写某页），统一处理防重入、状态栏进度与收尾。
+   */
+  async function runWikiGeneration(target: string, scope: { mode: "full" | "stale" | "pages"; slugs?: string[] }, firstStatus: string): Promise<void> {
+    // 挡重复点击：并发生成会互相破坏。根因层的守卫在 core（AgentSession.generateWiki），
+    // 这里再挡一层是为了立刻给出可见提示 —— 否则用户只会看到一个通知闪一下又消失。
+    if (wikiGenerating) {
+      void vscode.window.showInformationMessage("已有 Wiki 生成在进行中，请等它结束或先取消。");
+      return;
+    }
+    wikiGenerating = true;
+    const { provider, model, maxPages, tokenBudget } = readWikiConfig();
+    // 进度放在【状态栏】而不是弹窗通知里：进度通知没有关闭按钮（见 wikiStatusItem 的说明）。
+    // 取消有两个入口：① 点状态栏那条进度 ② Wiki 面板标题栏的「取消」（仅生成期间出现）
+    wikiTargetName = basename(target);
+    setWikiProgress(firstStatus);
+    wikiStatusItem.show();
+    void vscode.commands.executeCommand("setContext", "axon.wikiGenerating", true);
+    try {
+      await hub.dispatch({ type: "wiki_generate", workspace: target, provider, model, maxPages, tokenBudget, mode: scope.mode, slugs: scope.slugs } as any);
+    } catch (err) {
+      vscode.window.showErrorMessage(`生成 Wiki 失败：${(err as Error).message}`);
+    } finally {
+      // 无论成功/失败/取消都要收干净：残留的状态栏项和 spinner 看上去像卡死了
+      wikiTree.setGenerating(null);
+      wikiStatusItem.hide();
+      wikiTargetName = "";
+      wikiGenerating = false;
+      void vscode.commands.executeCommand("setContext", "axon.wikiGenerating", false);
+    }
+  }
+
   const isValidDir = async (p: string): Promise<boolean> => {
     try {
       const st = await vscode.workspace.fs.stat(vscode.Uri.file(p));
@@ -899,6 +951,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  // MCP 连接（stdio 子进程 / 远程会话）在扩展停用时要关掉，否则子进程会比窗口活得久
+  const mcpCapability = createNodeMcpCapability();
+  disposeOnDeactivate = async () => {
+    await Promise.allSettled([mcpCapability.dispose(), closeAllBrowsers()]);
+  };
   const hub = new SessionHub({
     storage,
     channel,
@@ -909,7 +966,7 @@ export function activate(context: vscode.ExtensionContext): void {
     workspaces: allWorkspaces,
     homeDir: homedir(),
     web: { search: webSearch, fetch: webFetch },
-    mcp: createNodeMcpCapability(),
+    mcp: mcpCapability,
     // 命令信任白名单：读写 `axon.trustedCommands` 配置（弹窗授权与设置管理共用同一份数据）
     commandTrust: new VSCodeCommandTrustStore(),
     // 滚动压缩配置：读取 VS Code 设置（axon.compaction.*），默认关闭
@@ -922,6 +979,8 @@ export function activate(context: vscode.ExtensionContext): void {
     getMediaEnabled: () => readMediaEnabled(),
     // 文生图开关：读取 VS Code 设置（axon.image.enabled），默认关闭
     getImageEnabled: () => readImageEnabled(),
+    // Wiki 目录字数上限：读取 VS Code 设置（axon.wiki.indexMaxChars）
+    getWikiIndexMaxChars: () => vscode.workspace.getConfiguration("axon.wiki").get<number>("indexMaxChars", 1200),
   });
 
   // REST 请求路由（webview 形态下替代 Express）
@@ -1056,6 +1115,11 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("axon.chatMode", () => provider.postToWebview({ type: "set_mode", mode: "quest" })),
     vscode.commands.registerCommand("axon.codeMode", () => provider.postToWebview({ type: "set_mode", mode: "agent" })),
     vscode.commands.registerCommand("axon.coworkMode", () => provider.postToWebview({ type: "set_mode", mode: "cowork" })),
+    // 连接器面板挂在聊天侧栏的 webview 里（它持有 Agent 通道）：先把侧栏亮出来再通知它打开
+    vscode.commands.registerCommand("axon.connectors", async () => {
+      await vscode.commands.executeCommand("axon.chat.focus");
+      provider.postToWebview({ type: "open_connectors" });
+    }),
     // 打开诊断输出面板：界面卡灰后可在此查看记录（含卡死时刻与当时的操作）
     vscode.commands.registerCommand("axon.showDiagnostics", () => showDiagLog()),
     // 预览浮层的「在编辑器中打开」：overlay 在 workbench 侧，不直接碰文件系统，
@@ -1197,50 +1261,43 @@ export function activate(context: vscode.ExtensionContext): void {
       // 目标工作区由用户显式选择，不做任何推定（推定会把「碰巧在看什么」当成「想做什么」）。
       const target = await pickWikiTargetWorkspace();
       if (!target) return; // 用户取消
-      // 挡重复点击：并发生成会互相破坏。根因层的守卫在 core（AgentSession.generateWiki），
-      // 这里再挡一层是为了立刻给出可见提示 —— 否则用户只会看到一个通知闪一下又消失。
-      if (wikiGenerating) {
-        void vscode.window.showInformationMessage("已有 Wiki 生成在进行中，请等它结束或先取消。");
-        return;
-      }
-      wikiGenerating = true;
-      const { provider, model, maxPages } = readWikiConfig();
-      // 生成是长任务（十几页 × 每页多次工具调用，可能跑几分钟）。
-      //
-      // 进度放在【状态栏】而不是弹窗通知里：进度通知没有关闭按钮（见 wikiStatusItem 的说明），
-      // 长任务期间它一直占着屏幕，用户只能靠点「取消」让它消失 —— 而取消会中止整个生成。
-      // 状态栏项既不挡视线，也不需要用户去关。
-      //
-      // 取消有两个入口，都与进度同处可见：
-      //   ① 点状态栏那条进度（它带了 command）
-      //   ② Wiki 面板标题栏的「取消」（仅生成期间出现，见 package.json 的 view/title）
-      wikiTargetName = basename(target);
-      setWikiProgress("正在勘察仓库、规划页面…");
-      wikiStatusItem.show();
-      // 让标题栏的「取消」按钮出现
-      void vscode.commands.executeCommand("setContext", "axon.wikiGenerating", true);
+      await runWikiGeneration(target, { mode: "full" }, "正在勘察仓库、规划页面…");
+    }),
+    vscode.commands.registerCommand("axon.wiki.refreshStale", async (item?: vscode.TreeItem) => {
+      // 只重写「待复核」的页面，不重新规划：代码改了一些之后刷新用，比整体重新生成便宜得多
+      const ws = (item as unknown as { wikiWorkspace?: string } | undefined)?.wikiWorkspace ?? await pickWikiTargetWorkspace();
+      if (!ws) return;
+      await runWikiGeneration(ws, { mode: "stale" }, "正在重写待复核的页面…");
+    }),
+    vscode.commands.registerCommand("axon.wiki.regeneratePage", async (item?: vscode.TreeItem) => {
+      const target = item as unknown as { wikiSlug?: string; wikiWorkspace?: string } | undefined;
+      if (!target?.wikiSlug || !target.wikiWorkspace) return;
+      await runWikiGeneration(target.wikiWorkspace, { mode: "pages", slugs: [target.wikiSlug] }, "正在重新生成页面…");
+    }),
+    vscode.commands.registerCommand("axon.wiki.markReviewed", async (item?: vscode.TreeItem) => {
+      // 看过后认为内容仍然准确（只是格式化、改了无关代码）：重新记录时间戳，不花钱重新生成
+      const target = item as unknown as { wikiSlug?: string; wikiWorkspace?: string } | undefined;
+      if (!target?.wikiSlug || !target.wikiWorkspace) return;
       try {
-        await hub.dispatch({ type: "wiki_generate", workspace: target, provider, model, maxPages } as any);
+        const { WikiStore } = await import("@axon/core");
+        const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+        const store = new WikiStore(allWorkspaces, createHost());
+        if (!(await store.markReviewed(target.wikiSlug, target.wikiWorkspace))) {
+          vscode.window.showWarningMessage("未找到该页面，可能已被删除。");
+        }
+        await refreshWikiTree().catch(() => { /* 刷新失败不影响结果 */ });
       } catch (err) {
-        vscode.window.showErrorMessage(`生成 Wiki 失败：${(err as Error).message}`);
-      } finally {
-        // 无论成功/失败/取消都要收干净：残留的状态栏项会一直挂在状态栏上，
-        // 应用节点上的 spinner 也会一直转下去 —— 那比不显示更糟，看上去像卡死了
-        wikiTree.setGenerating(null);
-        wikiStatusItem.hide();
-        wikiTargetName = "";
-        wikiGenerating = false;
-        void vscode.commands.executeCommand("setContext", "axon.wikiGenerating", false);
+        vscode.window.showErrorMessage(`标记失败：${(err as Error).message}`);
       }
     }),
     vscode.commands.registerCommand("axon.wiki.cancel", async () => {
-      // 取消 = 走会话取消：驱动层在每页之间检查中断信号，把作业记为 interrupted（可续跑）。
+      // 只取消 Wiki 生成（专用信号），不碰聊天：驱动层在每页之间检查，作业记为 interrupted（可续跑）。
       // 已生成的页面全部保留，下次点击接着写剩下的，不必从头再来。
       if (!wikiGenerating) {
         void vscode.window.showInformationMessage("当前没有正在进行的 Wiki 生成。");
         return;
       }
-      await hub.dispatch({ type: "cancel" } as any);
+      await hub.dispatch({ type: "wiki_cancel" } as any);
     }),
     vscode.commands.registerCommand("axon.wiki.pickModel", async () => {
       // 选 provider + 模型，写入设置（用户级）。
@@ -1319,7 +1376,8 @@ export function activate(context: vscode.ExtensionContext): void {
         const { WikiStore } = await import("@axon/core");
         const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
         const store = new WikiStore(allWorkspaces, createHost());
-        if (await store.remove(slug)) {
+        // 带上工作区：多个项目可以有同名页面，删错项目的文件是不可接受的
+        if (await store.remove(slug, target?.wikiWorkspace)) {
           vscode.window.showInformationMessage(`已删除页面「${label}」`);
         } else {
           vscode.window.showWarningMessage(`未找到页面「${label}」，可能已被删除。`);
@@ -2178,6 +2236,47 @@ export function activate(context: vscode.ExtensionContext): void {
   wikiWatcher.onDidDelete(scheduleWikiRefresh);
   context.subscriptions.push(wikiWatcher, { dispose: () => { if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer); } });
 
+  // 依据文件变了也要刷新：否则侧边栏的「待复核」要等重启或手动刷新才更新，
+  // 而聊天里的记忆召回卡片每轮都是新算的 —— 两边数字对不上。
+  // 只关心页面引用过的那些文件；稍等一会儿再刷，批量改动（格式化、切分支）只刷一次。
+  function onMaybeSourceChange(uri: vscode.Uri): void {
+    if (!wikiSourcePaths.has(normPathKey(uri.fsPath))) return;
+    if (wikiSourceTimer) clearTimeout(wikiSourceTimer);
+    wikiSourceTimer = setTimeout(() => {
+      wikiSourceTimer = undefined;
+      void refreshWikiTree().catch(() => { /* 列表刷新失败不该影响主流程 */ });
+    }, 1500);
+  }
+  // 只监听页面引用过的那些文件（每个工作区一个 RelativePattern，用 {a,b,c} 列出路径），列表变了就重建。
+  // 早先是一个 "**/*" 监听器：构建、git checkout、node_modules 的每次变动都要送进扩展进程，
+  // 没有 Wiki 的用户也在白白付这个代价。
+  function rewatchWikiSources(pages: { workspace: string; sources: string[] }[]): void {
+    const byWs = new Map<string, Set<string>>();
+    for (const p of pages) {
+      for (const src of p.sources) {
+        if (!byWs.has(p.workspace)) byWs.set(p.workspace, new Set());
+        byWs.get(p.workspace)!.add(src.replace(/\\/g, "/").replace(/[{}]/g, ""));
+      }
+    }
+    const key = [...byWs].map(([ws, s]) => `${ws}:${[...s].sort().join(",")}`).sort().join("|");
+    if (key === wikiWatchKey) return;
+    wikiWatchKey = key;
+    wikiSourceWatchers.forEach((d) => d.dispose());
+    wikiSourceWatchers = [];
+    for (const [ws, srcs] of byWs) {
+      const list = [...srcs];
+      const glob = list.length === 1 ? list[0] : `{${list.join(",")}}`;
+      const w = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(ws, glob), true, false, false);
+      w.onDidChange(onMaybeSourceChange);
+      w.onDidDelete(onMaybeSourceChange);
+      wikiSourceWatchers.push(w);
+    }
+  }
+  context.subscriptions.push({ dispose: () => {
+    if (wikiSourceTimer) clearTimeout(wikiSourceTimer);
+    wikiSourceWatchers.forEach((d) => d.dispose());
+  } });
+
 
   // 手动刷新命令（树标题栏刷新按钮用）
   context.subscriptions.push(
@@ -2278,7 +2377,7 @@ export function activate(context: vscode.ExtensionContext): void {
         name: p.name, label: p.label, builtin: p.builtin, locked: p.locked,
         configured: p.configured, modelCount: p.models.length,
       })));
-      void usageStatusBar.refresh();
+      void usageStatusBar?.refresh();
     } catch (err) {
       console.warn("[axon] provider 树刷新失败:", (err as Error).message);
     }
@@ -2286,18 +2385,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // 用户级 providers.json 路径助手（树发起的增删改默认写用户级，工作区级由 Studio 管理）
   const userProvidersJson = () => join(homedir(), ".axon", "settings", "providers.json");
-  const readProvidersJson = async (): Promise<{ providers: Record<string, unknown>; builtinApiKeys: Record<string, string> }> => {
-    const { readFile } = await import("node:fs/promises");
-    try {
-      const p = JSON.parse(await readFile(userProvidersJson(), "utf-8"));
-      return { providers: p.providers || {}, builtinApiKeys: p.builtinApiKeys || {} };
-    } catch { return { providers: {}, builtinApiKeys: {} }; }
+  // 读写都保留文件里的其它字段（builtinBaseUrls、builtinModels…）：只改树上动到的那部分。
+  // 文件损坏时读取直接报错，不会拿空配置把它覆盖掉（见 safeConfigFile）。
+  const readProvidersJson = async (): Promise<Record<string, unknown> & { providers: Record<string, unknown>; builtinApiKeys: Record<string, string> }> => {
+    const p = (await readJsonConfig<Record<string, unknown>>(userProvidersJson())) ?? {};
+    return { ...p, providers: (p.providers as Record<string, unknown>) || {}, builtinApiKeys: (p.builtinApiKeys as Record<string, string>) || {} };
   };
-  const writeProvidersJson = async (cfg: { providers: Record<string, unknown>; builtinApiKeys: Record<string, string> }): Promise<void> => {
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    const { dirname } = await import("node:path");
-    await mkdir(dirname(userProvidersJson()), { recursive: true });
-    await writeFile(userProvidersJson(), JSON.stringify(cfg, null, 2), "utf-8");
+  const writeProvidersJson = async (cfg: Record<string, unknown>): Promise<void> => {
+    await writeJsonConfig(userProvidersJson(), cfg);
   };
 
   const providersWatcher = vscode.workspace.createFileSystemWatcher("**/.axon/settings/providers.json");
@@ -2381,6 +2476,11 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 }
 
-export function deactivate(): void {
-  /* 资源由 context.subscriptions 自动释放 */
+/** 停用时要异步收尾的资源（MCP 子进程、Playwright 浏览器）；activate 里赋值 */
+let disposeOnDeactivate: (() => Promise<void>) | undefined;
+
+export async function deactivate(): Promise<void> {
+  // 其余资源由 context.subscriptions 自动释放；这几类是子进程，必须显式关闭
+  await stopRecording(true).catch(() => null); // 还在录音就丢掉，别让麦克风一直开着
+  await disposeOnDeactivate?.();
 }

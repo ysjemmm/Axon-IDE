@@ -12,6 +12,7 @@
  * 缺失时回退占位页，保证视图可加载、内核链路可联调。
  */
 
+import { isSafeExternalUrl } from "./safeConfigFile.js";
 import * as vscode from "vscode";
 import type { ControlCommand } from "@axon/core";
 import type { VSCodeChannel } from "./vscodeChannel.js";
@@ -88,6 +89,18 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
         await vscode.commands.executeCommand("setContext", "axon.chatMode", m.mode);
         return;
       }
+      // 后台 Agent 任务完成：面板没开着时用 VS Code 通知提醒（开着时面板里自己有提醒）
+      if (m.type === "agent_task_notify" && typeof m.sessionId === "string") {
+        if (view.visible) return;
+        const title = typeof m.title === "string" ? m.title : "后台任务";
+        const text = m.status === "done" ? `后台任务完成：${title}` : m.status === "failed" ? `后台任务出错：${title}` : `后台任务已停止：${title}`;
+        const pick = await vscode.window.showInformationMessage(text, "查看");
+        if (pick === "查看") {
+          view.show?.(false);
+          void view.webview.postMessage({ type: "open_session", sessionId: m.sessionId });
+        }
+        return;
+      }
       // 聚焦 Axon 终端（从工具卡片"打开终端"按钮）
       if (m.type === "focus_terminal") {
         try {
@@ -105,6 +118,12 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
 
       // 用系统浏览器打开外部链接（webview 中 target=_blank 被拦截）
       if (m.type === "open_external" && typeof m.url === "string") {
+        // 只放行网页和邮件链接：页面内容来自模型输出，file:、vscode: 这类链接会交给系统默认程序打开，
+        // 等于让一段文字替用户打开本机文件或触发其它扩展的命令
+        if (!isSafeExternalUrl(m.url as string)) {
+          vscode.window.showWarningMessage(`已拦截不安全的链接：${String(m.url).slice(0, 120)}`);
+          return;
+        }
         try {
           await vscode.env.openExternal(vscode.Uri.parse(m.url as string));
         } catch {
@@ -981,17 +1000,21 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
       .replace(/(src|href)="\.?\/assets\//g, `$1="${baseUri}/assets/`)
       .replace(/(src|href)="\.\/(?!assets)/g, `$1="${baseUri}/`);
 
-    // 注入 CSP（允许 webview 资源 + inline 样式；脚本仅限 webview 源）
+    // 注入 CSP（允许 webview 资源 + inline 样式；脚本仅限 webview 源）。
+    // nonce 只发给聊天里的 HTML 预览：预览 iframe 继承这份 CSP，带上同一个 nonce 的脚本才能运行，
+    // 让 AI 写的交互页面（按钮、表单、图表库）真正可用；iframe 不开同源权限，脚本碰不到主页面。
+    // 'unsafe-eval' 用于把预览里的 onclick="..." 这类内联事件转成监听器（CSP 下内联事件无法用 nonce 放行）。
+    const nonce = createCspNonce();
     const csp = [
       `default-src 'none'`,
       `img-src ${webview.cspSource} https: data:`,
       `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src ${webview.cspSource}`,
+      `script-src ${webview.cspSource} 'nonce-${nonce}' 'unsafe-eval'`,
       `font-src ${webview.cspSource} data:`,
       `connect-src ${webview.cspSource}`,
     ].join("; ");
     if (!/Content-Security-Policy/.test(html)) {
-      html = html.replace(/<head>/i, `<head>\n<meta http-equiv="Content-Security-Policy" content="${csp}" />`);
+      html = html.replace(/<head>/i, `<head>\n<meta http-equiv="Content-Security-Policy" content="${csp}" />\n<meta name="axon-csp-nonce" content="${nonce}" />`);
     }
     return html;
   }
@@ -1030,4 +1053,9 @@ body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);displa
 </div>
 </body></html>`;
   }
+}
+
+/** CSP nonce：每次生成页面换一个 */
+function createCspNonce(): string {
+  return require("crypto").randomBytes(18).toString("base64");
 }

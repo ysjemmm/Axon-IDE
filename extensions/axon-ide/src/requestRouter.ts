@@ -7,15 +7,17 @@
  * 回传。路径与返回结构与 server Express 路由保持一致，使前端 apiClient 零改动复用。
  */
 
+import { readJsonConfig, writeJsonConfig } from "./safeConfigFile.js";
 import * as vscode from "vscode";
 import { homedir } from "node:os";
 import { resolve, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { RelayStore, renameSessionTitle, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, assertUniqueModelIds, supportsThinking, providerEnvKeys, stripProviderEnvLines, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry, type ProviderQuotaConfig } from "@axon/core";
+import { RelayStore, renameSessionTitle, ProviderRegistry, refreshProviders, probeProviderModels, RESERVED_PROVIDER_NAMES, assertUniqueModelIds, supportsThinking, providerEnvKeys, stripProviderEnvLines, type SessionStorage, type ResolvedProvider, type ProviderConfigFile, type ProviderModel, type RawProviderEntry, type ProviderQuotaConfig, normalizePricing, validateQuotaRule, presetsForBaseUrl, detectQuota } from "@axon/core";
 import { createVSCodeAgentHost } from "@axon/host-vscode";
-import { queryProviderQuota, quotaTokenStore, validateQuotaQuery } from "./quotaService.js";
+import { queryProvider, quotaSecrets, clearQuotaSecrets, quotaTokenStatus, saveQuotaTokens, quotaOverview, invalidateQuotaOverview } from "./quotaService.js";
 import { createMarketplaceRegistry, persistSourcesToSettings } from "./marketplaceBridge.js";
+import { listInputDevices, startRecording, stopRecording, takeLevels, transcribe } from "./voiceInput.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -690,6 +692,53 @@ export class RequestRouter {
       await resolveProviders(workspace || d.defaultWorkspace);
       return { ok: true };
     }
+    // 语音输入：配置只存用户级；录音在扩展进程里做（webview 拿不到麦克风），识别复用 Provider 的地址和 Key
+    if (path === "/api/voice/config" && method === "GET") {
+      const cfg = (await readProviderConfig("user")).voiceInput;
+      return { config: cfg ?? null, supported: true };
+    }
+    if (path === "/api/voice/config" && method === "PUT") {
+      const { config: next } = (body || {}) as { config?: { provider?: string; model?: string; language?: string } | null };
+      const config = await readProviderConfig("user");
+      if (next?.provider && next.model?.trim()) {
+        config.voiceInput = { provider: next.provider, model: next.model.trim(), ...(next.language?.trim() ? { language: next.language.trim() } : {}) };
+      } else {
+        delete config.voiceInput;
+      }
+      await writeProviderConfig("user", config);
+      return { ok: true };
+    }
+    if (path === "/api/voice/devices" && method === "GET") {
+      const [devices, config] = await Promise.all([listInputDevices().catch(() => []), readProviderConfig("user")]);
+      return { devices, selected: config.voiceDevice ?? null };
+    }
+    if (path === "/api/voice/device" && method === "PUT") {
+      const { device } = (body || {}) as { device?: { id?: string; name?: string } | null };
+      const config = await readProviderConfig("user");
+      if (device?.id && device.name) config.voiceDevice = { id: String(device.id), name: String(device.name) };
+      else delete config.voiceDevice;
+      await writeProviderConfig("user", config);
+      return { ok: true };
+    }
+    if (path === "/api/voice/start" && method === "POST") {
+      // monitor：设备菜单里试音，只看音量不识别，不要求先配好识别服务
+      const { monitor } = (body || {}) as { monitor?: boolean };
+      const config = await readProviderConfig("user");
+      if (!monitor && !config.voiceInput) return { ok: false, needsConfig: true };
+      await startRecording(config.voiceDevice ?? null);
+      return { ok: true };
+    }
+    if (path === "/api/voice/levels" && method === "GET") {
+      return takeLevels();
+    }
+    if (path === "/api/voice/stop" && method === "POST") {
+      const { cancel } = (body || {}) as { cancel?: boolean };
+      const wav = await stopRecording(!!cancel);
+      if (!wav) return { text: "" };
+      const cfg = (await readProviderConfig("user")).voiceInput;
+      if (!cfg) return { ok: false, needsConfig: true };
+      return { text: await transcribe(wav, cfg) };
+    }
     const providerLevelMatch = path.match(/^\/api\/providers\/(user|workspace)$/);
     if (providerLevelMatch && method === "PUT") {
       const level = providerLevelMatch[1] as "user" | "workspace";
@@ -771,13 +820,23 @@ export class RequestRouter {
       }
       return { models: await probeProviderModels(url, key) };
     }
+    // ── Provider 用量查询（规则执行在 core/quota；请求只在宿主发出，网页拿不到任何密钥）──
+    const findProvider = async (name: string) => {
+      const provider = (await resolveProviders(query.get("workspace") || d.defaultWorkspace)).find((item) => item.name === name);
+      if (!provider) throw new Error(`provider 不存在：${name}`);
+      return provider;
+    };
+    if (path === "/api/quota/overview" && method === "GET") {
+      const providers = await resolveProviders(query.get("workspace") || d.defaultWorkspace);
+      return { entries: await quotaOverview(providers, d.secrets, query.get("refresh") === "1") };
+    }
     const providerQuotaMatch = path.match(/^\/api\/providers\/(user|workspace)\/([^/]+)\/quota$/);
     if (providerQuotaMatch && method === "PUT") {
       const level = providerQuotaMatch[1] as "user" | "workspace";
       const name = decodeURIComponent(providerQuotaMatch[2]);
       const quota = (body as { quota?: ProviderQuotaConfig | null } | undefined)?.quota;
       const config = await readProviderConfig(level, query.get("workspace") || d.defaultWorkspace);
-      if (quota) validateQuotaQuery(quota);
+      if (quota) validateQuotaRule(quota);
       if (RESERVED_PROVIDER_NAMES.includes(name)) {
         config.builtinQuota = config.builtinQuota || {};
         if (quota) config.builtinQuota[name] = quota;
@@ -789,37 +848,56 @@ export class RequestRouter {
         else delete entry.quota;
       }
       await writeProviderConfig(level, config, query.get("workspace") || d.defaultWorkspace);
+      invalidateQuotaOverview(name);
       return { ok: true };
+    }
+    // 计费单价：只用于回复底部的花费估算，不参与任何请求
+    const providerPricingMatch = path.match(/^\/api\/providers\/(user|workspace)\/([^/]+)\/pricing$/);
+    if (providerPricingMatch && method === "PUT") {
+      const level = providerPricingMatch[1] as "user" | "workspace";
+      const name = decodeURIComponent(providerPricingMatch[2]);
+      if (RESERVED_PROVIDER_NAMES.includes(name)) throw new Error("官方 Provider 按 Credits 计费，不支持自定义单价");
+      const pricing = normalizePricing((body as { pricing?: unknown } | undefined)?.pricing);
+      const config = await readProviderConfig(level, query.get("workspace") || d.defaultWorkspace);
+      const entry = config.providers?.[name];
+      if (!entry) throw new Error(`provider 不存在：${name}`);
+      if (pricing) entry.pricing = pricing;
+      else delete entry.pricing;
+      await writeProviderConfig(level, config, query.get("workspace") || d.defaultWorkspace);
+      return { ok: true };
+    }
+    const providerQuotaPresetsMatch = path.match(/^\/api\/providers\/([^/]+)\/quota\/presets$/);
+    if (providerQuotaPresetsMatch && method === "GET") {
+      const provider = await findProvider(decodeURIComponent(providerQuotaPresetsMatch[1]));
+      return { presets: presetsForBaseUrl(provider.baseUrl) };
+    }
+    const providerQuotaDetectMatch = path.match(/^\/api\/providers\/([^/]+)\/quota\/detect$/);
+    if (providerQuotaDetectMatch && method === "POST") {
+      const provider = await findProvider(decodeURIComponent(providerQuotaDetectMatch[1]));
+      const detected = await detectQuota(provider, { secrets: quotaSecrets(d.secrets, provider) });
+      return { presetId: detected.preset?.id, presetLabel: detected.preset?.label, rule: detected.rule, result: detected.result, attempts: detected.attempts };
     }
     const providerQuotaTestMatch = path.match(/^\/api\/providers\/([^/]+)\/quota\/test$/);
     if (providerQuotaTestMatch && method === "POST") {
-      const name = decodeURIComponent(providerQuotaTestMatch[1]);
-      const ws = query.get("workspace") || d.defaultWorkspace;
-      const resolved = await resolveProviders(ws);
-      const provider = resolved.find((item) => item.name === name);
-      if (!provider) throw new Error(`provider 不存在：${name}`);
+      const provider = await findProvider(decodeURIComponent(providerQuotaTestMatch[1]));
       const quota = (body as { quota?: ProviderQuotaConfig } | undefined)?.quota;
       if (!quota) throw new Error("额度查询规则不能为空");
-      return queryProviderQuota(provider, quota, quotaTokenStore(d.secrets, name));
+      return queryProvider(provider, quota, d.secrets);
     }
     const providerQuotaTokensMatch = path.match(/^\/api\/providers\/([^/]+)\/quota\/tokens$/);
     if (providerQuotaTokensMatch && method === "GET") {
-      const name = decodeURIComponent(providerQuotaTokensMatch[1]);
-      const store = quotaTokenStore(d.secrets, name);
-      const [accessToken, refreshToken, cookie] = await Promise.all([
-        store.getAccessToken(),
-        store.getRefreshToken(),
-        store.getCookie(),
-      ]);
-      return { hasAccessToken: !!accessToken?.value, hasRefreshToken: !!refreshToken, hasCookie: !!cookie };
+      const provider = await findProvider(decodeURIComponent(providerQuotaTokensMatch[1]));
+      return quotaTokenStatus(d.secrets, provider);
     }
     if (providerQuotaTokensMatch && method === "PUT") {
-      const name = decodeURIComponent(providerQuotaTokensMatch[1]);
-      const tokens = (body || {}) as { accessToken?: string; refreshToken?: string; cookie?: string };
-      const store = quotaTokenStore(d.secrets, name);
-      if (tokens.accessToken?.trim()) await store.setAccessToken(tokens.accessToken.trim(), undefined);
-      if (tokens.refreshToken?.trim()) await store.setRefreshToken(tokens.refreshToken.trim());
-      if (tokens.cookie?.trim()) await store.setCookie(tokens.cookie.trim());
+      const provider = await findProvider(decodeURIComponent(providerQuotaTokensMatch[1]));
+      await saveQuotaTokens(d.secrets, provider, (body || {}) as { accessToken?: string; refreshToken?: string; cookie?: string });
+      return { ok: true };
+    }
+    if (providerQuotaTokensMatch && method === "DELETE") {
+      const provider = await findProvider(decodeURIComponent(providerQuotaTokensMatch[1]));
+      await clearQuotaSecrets(d.secrets, provider);
+      invalidateQuotaOverview(provider.name);
       return { ok: true };
     }
     const providerKeyMatch = path.match(/^\/api\/providers\/(user|workspace)\/builtin-key$/);
@@ -930,9 +1008,10 @@ function providerConfigPath(level: "user" | "workspace", workspace?: string): st
 
 /** 读某 level 的 providers.json（不存在/损坏返回空配置） */
 async function readProviderConfig(level: "user" | "workspace", workspace?: string): Promise<ProviderConfigFile> {
-  const { readFile } = await import("node:fs/promises");
-  try {
-    const parsed = JSON.parse(await readFile(providerConfigPath(level, workspace), "utf-8")) as ProviderConfigFile;
+  // 文件不存在 → 空配置；存在但损坏 → 抛错（不能当成空配置，否则下一次保存会把它整个覆盖掉）
+  const parsed = await readJsonConfig<ProviderConfigFile>(providerConfigPath(level, workspace));
+  if (!parsed) return { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {}, builtinQuota: {} };
+  {
     return {
       providers: parsed.providers || {},
       builtinApiKeys: parsed.builtinApiKeys || {},
@@ -940,16 +1019,14 @@ async function readProviderConfig(level: "user" | "workspace", workspace?: strin
       builtinModels: parsed.builtinModels || {},
       builtinQuota: parsed.builtinQuota || {},
       ...(parsed.visionFallbackModel ? { visionFallbackModel: parsed.visionFallbackModel } : {}),
+      ...(parsed.voiceInput ? { voiceInput: parsed.voiceInput } : {}),
+      ...(parsed.voiceDevice ? { voiceDevice: parsed.voiceDevice } : {}),
     };
-  } catch {
-    return { providers: {}, builtinApiKeys: {}, builtinBaseUrls: {}, builtinQuota: {} };
   }
 }
 
 /** 覆盖写某 level 的 providers.json */
 async function writeProviderConfig(level: "user" | "workspace", config: ProviderConfigFile, workspace?: string): Promise<void> {
-  const { mkdir, writeFile } = await import("node:fs/promises");
-  const { dirname } = await import("node:path");
   const normalized: ProviderConfigFile = {
     providers: config.providers || {},
     builtinApiKeys: config.builtinApiKeys || {},
@@ -957,10 +1034,11 @@ async function writeProviderConfig(level: "user" | "workspace", config: Provider
     builtinModels: config.builtinModels || {},
     builtinQuota: config.builtinQuota || {},
     ...(config.visionFallbackModel ? { visionFallbackModel: config.visionFallbackModel } : {}),
+    ...(config.voiceInput ? { voiceInput: config.voiceInput } : {}),
+    ...(config.voiceDevice ? { voiceDevice: config.voiceDevice } : {}),
   };
-  const p = providerConfigPath(level, workspace);
-  await mkdir(dirname(p), { recursive: true });
-  await writeFile(p, JSON.stringify(normalized, null, 2), "utf-8");
+  // 原子写 + 仅本人可读：文件里有 API Key
+  await writeJsonConfig(providerConfigPath(level, workspace), normalized);
 }
 
 /** 新增/覆盖自定义 provider */
@@ -1121,3 +1199,4 @@ function flattenProviderModels(providers: ResolvedProvider[]) {
         })),
     );
 }
+
