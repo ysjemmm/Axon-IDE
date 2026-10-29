@@ -614,6 +614,8 @@ jobs:
       - name: Ad-hoc sign (arm64)
         run: |
           APP="$(dirname "$PWD")/VSCode-darwin-arm64/Axon IDE.app"
+          # 语音输入要用麦克风：Info.plist 必须写明用途，否则系统不弹授权、直接给静音
+          plutil -replace NSMicrophoneUsageDescription -string "Axon IDE 需要使用麦克风进行语音输入。" "$APP/Contents/Info.plist"
           echo "Signing: $APP"
           codesign --force --deep --sign - "$APP"
           echo "Verify:"
@@ -728,6 +730,8 @@ jobs:
       - name: Ad-hoc sign (x64)
         run: |
           APP="$(dirname "$PWD")/VSCode-darwin-x64/Axon IDE.app"
+          # 语音输入要用麦克风：Info.plist 必须写明用途，否则系统不弹授权、直接给静音
+          plutil -replace NSMicrophoneUsageDescription -string "Axon IDE 需要使用麦克风进行语音输入。" "$APP/Contents/Info.plist"
           echo "Signing: $APP"
           codesign --force --deep --sign - "$APP"
           echo "Verify:"
