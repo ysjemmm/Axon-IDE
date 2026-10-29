@@ -20,8 +20,23 @@ const UPDATE_ACCOUNT_USAGE_MODAL_COMMAND = 'axon.updateAccountUsageModal';
 /** 四芒星 path（viewBox 0 0 24 24），更接近 Axon ✦ 标识 */
 const STAR_PATH = 'M12 2 L14.4 9.6 L22 12 L14.4 14.4 L12 22 L9.6 14.4 L2 12 L9.6 9.6 Z';
 
+/** 一行用量指标（扩展端已格式化好，这里只管排版） */
+interface AxonUsageRow {
+	label: string;
+	value: string;
+	detail?: string;
+	/** 0~100，有总额的指标才有，用来画进度条 */
+	percent?: number;
+}
+
 interface AxonAccountUsageModalOptions {
 	apiKey?: string;
+	/** 当前 Provider 的名字；旧版扩展不传时显示 Axon 官方 */
+	title?: string;
+	/** 全部指标（余额、订阅额度……）；有它就按行显示，没有就退回旧的 Credits 一行 */
+	rows?: AxonUsageRow[];
+	/** 例如「1 分钟前更新」 */
+	updatedText?: string;
 	usage?: { usedCredits?: number; totalCredits?: number; updatedAt?: number | null };
 	errorMessage?: string;
 	loading?: boolean;
@@ -53,6 +68,10 @@ function maskApiKey(apiKey: string | undefined): string {
 
 class AxonAccountUsageModalContribution extends Disposable {
 	private overlay: HTMLElement | undefined;
+	private nameEl: HTMLElement | undefined;
+	private subEl: HTMLElement | undefined;
+	private creditsLabel: HTMLElement | undefined;
+	private rowsEl: HTMLElement | undefined;
 	private creditsValue: HTMLElement | undefined;
 	private error: HTMLElement | undefined;
 	private body: HTMLElement | undefined;
@@ -104,11 +123,13 @@ class AxonAccountUsageModalContribution extends Disposable {
 		// allow-any-unicode-next-line
 		name.textContent = 'Axon 官方';
 		info.appendChild(name);
+		this.nameEl = name;
 		const sub = document.createElement('div');
 		sub.className = 'axon-modal-sub';
 		// allow-any-unicode-next-line
 		sub.textContent = 'Provider: Axon 官方';
 		info.appendChild(sub);
+		this.subEl = sub;
 		header.appendChild(info);
 
 		const closeBtn = document.createElement('button');
@@ -125,11 +146,19 @@ class AxonAccountUsageModalContribution extends Disposable {
 		creditsLabel.className = 'axon-modal-credits-label';
 		creditsLabel.textContent = 'Credits';
 		body.appendChild(creditsLabel);
+		this.creditsLabel = creditsLabel;
 
 		const creditsValue = document.createElement('div');
 		creditsValue.className = 'axon-modal-credits-value';
 		this.creditsValue = creditsValue;
 		body.appendChild(creditsValue);
+
+		// 多指标时替代上面的 Credits 一行；放在它后面，免得打乱旧格式的两列网格
+		const rowsEl = document.createElement('div');
+		rowsEl.className = 'axon-modal-rows';
+		rowsEl.style.display = 'none';
+		body.appendChild(rowsEl);
+		this.rowsEl = rowsEl;
 
 		const error = document.createElement('div');
 		error.className = 'axon-modal-error';
@@ -193,12 +222,33 @@ class AxonAccountUsageModalContribution extends Disposable {
 		if (!this.creditsValue || !this.body || !this.error) {
 			return;
 		}
-		if (options?.loading) {
-			this.creditsValue.classList.add('loading');
-			this.creditsValue.textContent = 'Loading latest usage...';
+		const title = options?.title?.trim();
+		if (title && this.nameEl && this.subEl) {
+			this.nameEl.textContent = title;
+			// allow-any-unicode-next-line
+			this.subEl.textContent = options?.loading ? '正在刷新用量…' : (options?.updatedText || `Provider: ${title}`);
+		}
+
+		const rows = options?.rows?.length ? options.rows : undefined;
+		if (rows && this.rowsEl && this.creditsLabel) {
+			// 新版：每个指标一行（余额、订阅额度……），刷新期间先显示上一次的数据
+			this.creditsLabel.style.display = 'none';
+			this.creditsValue.style.display = 'none';
+			this.rowsEl.style.display = '';
+			this.renderRows(rows);
 		} else {
-			this.creditsValue.classList.remove('loading');
-			this.creditsValue.textContent = `${formatUsed(options?.usage?.usedCredits)} used / ${formatLimit(options?.usage?.totalCredits)} covered in plan`;
+			if (this.rowsEl && this.creditsLabel) {
+				this.rowsEl.style.display = 'none';
+				this.creditsLabel.style.display = '';
+				this.creditsValue.style.display = '';
+			}
+			if (options?.loading) {
+				this.creditsValue.classList.add('loading');
+				this.creditsValue.textContent = 'Loading latest usage...';
+			} else {
+				this.creditsValue.classList.remove('loading');
+				this.creditsValue.textContent = `${formatUsed(options?.usage?.usedCredits)} used / ${formatLimit(options?.usage?.totalCredits)} covered in plan`;
+			}
 		}
 
 		if (options?.errorMessage) {
@@ -212,9 +262,59 @@ class AxonAccountUsageModalContribution extends Disposable {
 		}
 	}
 
+	private renderRows(rows: AxonUsageRow[]): void {
+		const container = this.rowsEl;
+		if (!container) {
+			return;
+		}
+		container.replaceChildren();
+		for (const row of rows) {
+			const item = document.createElement('div');
+			item.className = 'axon-modal-row';
+
+			const head = document.createElement('div');
+			head.className = 'axon-modal-row-head';
+			const label = document.createElement('span');
+			label.className = 'axon-modal-row-label';
+			label.textContent = row.label;
+			const value = document.createElement('span');
+			value.className = 'axon-modal-row-value';
+			value.textContent = row.percent !== undefined ? `${row.value}  \u00b7  ${row.percent}%` : row.value;
+			head.append(label, value);
+			item.appendChild(head);
+
+			if (row.percent !== undefined) {
+				const bar = document.createElement('div');
+				bar.className = 'axon-modal-row-bar';
+				const fill = document.createElement('div');
+				fill.className = 'axon-modal-row-fill';
+				if (row.percent >= 90) {
+					fill.classList.add('danger');
+				} else if (row.percent >= 70) {
+					fill.classList.add('warn');
+				}
+				fill.style.width = `${Math.max(1, Math.min(100, row.percent))}%`;
+				bar.appendChild(fill);
+				item.appendChild(bar);
+			}
+
+			if (row.detail) {
+				const detail = document.createElement('div');
+				detail.className = 'axon-modal-row-detail';
+				detail.textContent = row.detail;
+				item.appendChild(detail);
+			}
+			container.appendChild(item);
+		}
+	}
+
 	private hide(): void {
 		this.overlay?.remove();
 		this.overlay = undefined;
+		this.nameEl = undefined;
+		this.subEl = undefined;
+		this.creditsLabel = undefined;
+		this.rowsEl = undefined;
 		this.creditsValue = undefined;
 		this.error = undefined;
 		this.body = undefined;
