@@ -275,7 +275,11 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 		const sources = es.merge(src, extensions)
 			.pipe(filter(sourceFilterPattern, { dot: true }));
 
-		let version = packageJson.version;
+		// Axon: 产品版本以 product.json 为准；package.json 的 version 保留为上游 Code OSS 的
+		// 基线版本，不再用它覆盖产物版本。否则安装包报告的版本来自 package.json（基线），
+		// 而发布 tag 来自 product.json（产品版本），两者不一致会让更新检查永远判定"有新版本"，
+		// 用户装完仍被反复提示升级。
+		let version = (product as { version?: string }).version || packageJson.version;
 		const quality = (product as { quality?: string }).quality;
 
 		if (quality && quality !== 'stable') {

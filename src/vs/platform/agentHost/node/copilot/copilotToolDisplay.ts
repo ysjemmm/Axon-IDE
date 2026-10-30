@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { PermissionRequest } from '@github/copilot-sdk';
 import { hasKey } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
 import { appendEscapedMarkdownInlineCode, escapeMarkdownLinkLabel, MarkdownString } from '../../../../base/common/htmlContent.js';
@@ -896,7 +895,7 @@ export function tryStringify(value: unknown): string | undefined {
 }
 
 /**
- * Loose, optional-field projection of the SDK's {@link PermissionRequest}
+ * Loose, optional-field projection of the SDK's `PermissionRequest`
  * discriminated union. Lets the rest of the agent host read the well-known
  * fields without `switch (request.kind)` narrowing at every access site.
  *
@@ -907,8 +906,12 @@ export function tryStringify(value: unknown): string | undefined {
  * can rely on a single shape.
  */
 export interface ITypedPermissionRequest {
-	/** Permission kind discriminator from the SDK. */
-	kind: PermissionRequest['kind'];
+	/**
+	 * Permission kind discriminator.
+	 * Axon: @github/copilot-sdk was removed, so this uses the host's own permissionKind
+	 * union, which covers every value the SDK produced.
+	 */
+	kind: NonNullable<IAgentToolPendingConfirmationSignal['permissionKind']>;
 	/** Tool call ID that triggered this permission request, when available. */
 	toolCallId?: string;
 	/** File path — set for `read` permission requests. */

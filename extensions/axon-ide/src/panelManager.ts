@@ -5,6 +5,7 @@
  * 加载同一份 web 构建产物，通过 URL 参数 `?view=xxx` 路由到不同视图。
  */
 
+import { isSafeExternalUrl } from "./safeConfigFile.js";
 import * as vscode from "vscode";
 
 /** 已打开的面板缓存（按 panelId 去重） */
@@ -24,10 +25,10 @@ export interface PanelOptions {
   extensionUri: vscode.Uri;
   /** 可选：REST 请求路由器（让 Panel 内的 webview 也能代理 REST 请求） */
   router?: { handle(method: string, path: string, body?: unknown): Promise<unknown> };
+  /** Provider 配置保存后通知侧栏刷新 */
+  onProvidersChanged?: () => void;
   /** 可选：Tab 图标路径（相对 extensionUri） */
   icon?: string;
-  /** 可选：向侧栏 webview 发消息（跨 webview 通信） */
-  postToSidebar?: (message: unknown) => void;
 }
 
 /**
@@ -69,6 +70,38 @@ export function openOrFocusPanel(options: PanelOptions): vscode.WebviewPanel {
       if (!msg || typeof msg !== "object") return;
       const m = msg as Record<string, unknown>;
 
+      if (m.type === "cowork_pick_output_dir" && typeof m.requestId === "string") {
+        let path: string | undefined;
+        let error: string | undefined;
+        try {
+          const initialPath = typeof m.initialPath === "string" && m.initialPath ? m.initialPath : undefined;
+          const uris = await vscode.window.showOpenDialog({
+            canSelectFiles: false,
+            canSelectFolders: true,
+            canSelectMany: false,
+            defaultUri: initialPath ? vscode.Uri.file(initialPath) : undefined,
+            openLabel: "设为产出位置",
+            title: "选择文档产出位置",
+          });
+          path = uris?.[0]?.fsPath;
+        } catch (err) {
+          error = (err as Error).message;
+        }
+        void panel.webview.postMessage({
+          type: "cowork_output_dir_picked",
+          clientId: typeof m.clientId === "string" ? m.clientId : undefined,
+          requestId: m.requestId,
+          path,
+          error,
+        });
+        return;
+      }
+
+      if (m.type === "providers_changed") {
+        options.onProvidersChanged?.();
+        return;
+      }
+
       // 打开 Power Tab（点击聊天卡片中的 Power 名称）
       if (m.type === "open_power_tab" && typeof m.powerName === "string") {
         const powerName = m.powerName as string;
@@ -87,6 +120,12 @@ export function openOrFocusPanel(options: PanelOptions): vscode.WebviewPanel {
 
       // 用系统浏览器打开外部链接（webview 中 target=_blank 被拦截）
       if (m.type === "open_external" && typeof m.url === "string") {
+        // 只放行网页和邮件链接：页面内容来自模型输出，file:、vscode: 这类链接会交给系统默认程序打开，
+        // 等于让一段文字替用户打开本机文件或触发其它扩展的命令
+        if (!isSafeExternalUrl(m.url as string)) {
+          vscode.window.showWarningMessage(`已拦截不安全的链接：${String(m.url).slice(0, 120)}`);
+          return;
+        }
         try {
           await vscode.env.openExternal(vscode.Uri.parse(m.url as string));
         } catch {
@@ -101,16 +140,6 @@ export function openOrFocusPanel(options: PanelOptions): vscode.WebviewPanel {
           await vscode.window.showTextDocument(vscode.Uri.file(m.filePath as string), { preview: true });
         } catch {
           vscode.window.showWarningMessage(`无法打开文件：${m.filePath}`);
-        }
-        return;
-      }
-
-      // 从 Relay Tab 跳转到并行面板：转发给侧栏 webview
-      if (m.type === "navigate_parallel") {
-        if (options.postToSidebar) {
-          options.postToSidebar({ type: "navigate_parallel", batchId: m.batchId || null, relayId: m.relayId || null });
-        } else {
-          vscode.window.showInformationMessage("未找到关联的并行执行记录。请在侧栏「并行」面板中查看。");
         }
         return;
       }
@@ -291,11 +320,13 @@ function buildWebviewHtml(webview: vscode.Webview, webRoot: vscode.Uri, query: s
   // 简单的 SPA 入口 HTML（加载 web 产物的 JS/CSS）
   // 因为 web 产物的 index.html 内的资源引用是相对路径（./assets/...），
   // 我们直接构造一个加载 index 的页面，通过 URL hash/search 传参数
+  // nonce 的用途见 viewProvider.buildHtml：放行聊天里 HTML 预览的脚本
+  const nonce: string = require("crypto").randomBytes(18).toString("base64");
   const csp = [
     `default-src 'none'`,
     `img-src ${webview.cspSource} https: data:`,
     `style-src ${webview.cspSource} 'unsafe-inline'`,
-    `script-src ${webview.cspSource} 'unsafe-eval'`,
+    `script-src ${webview.cspSource} 'nonce-${nonce}' 'unsafe-eval'`,
     `font-src ${webview.cspSource} data:`,
     `connect-src ${webview.cspSource} ws: wss: http: https:`,
     `worker-src ${webview.cspSource} blob:`,
@@ -320,7 +351,7 @@ function buildWebviewHtml(webview: vscode.Webview, webRoot: vscode.Uri, query: s
 
   // 注入 CSP
   if (!/Content-Security-Policy/.test(html)) {
-    html = html.replace(/<head>/i, `<head>\n<meta http-equiv="Content-Security-Policy" content="${csp}" />`);
+    html = html.replace(/<head>/i, `<head>\n<meta http-equiv="Content-Security-Policy" content="${csp}" />\n<meta name="axon-csp-nonce" content="${nonce}" />`);
   }
 
   // 注入 URL 参数脚本（在 app 加载前设置 location.search 模拟参数）

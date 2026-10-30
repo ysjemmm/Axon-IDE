@@ -14,6 +14,9 @@ import * as vscode from "vscode";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { ProviderRegistry, refreshProviders, type QuotaMetric } from "@axon/core";
+import { createVSCodeAgentHost } from "@axon/host-vscode";
+import { queryProvider } from "./quotaService.js";
 
 /** 点击状态栏按钮时执行的命令（聚焦 Axon 对话视图）。 */
 const FOCUS_CHAT_COMMAND = "axon.focusChat";
@@ -33,6 +36,8 @@ export interface AxonUsageStats {
 	totalCredits: number;
 	updatedAt: number | null;
 	errorMessage?: string;
+	/** 用量查询返回的全部指标（余额、订阅额度、时间窗口限额……）；有它时状态栏按指标渲染 */
+	metrics?: QuotaMetric[];
 }
 
 /** 官方接口返回的最小数据结构：更新时间由 IDE 在成功更新时自动记录。 */
@@ -49,6 +54,7 @@ export interface AxonUsageStatusBar {
 	setUsage(usage: AxonUsageResponse): void;
 	clearUsage(): void;
 	refresh(): Promise<void>;
+	setActiveProvider(provider?: string): Promise<void>;
 	dispose(): void;
 }
 
@@ -73,20 +79,82 @@ function formatUpdatedAt(updatedAt: number | null, now = Date.now()): string {
 	return `${days} 天前更新`;
 }
 
-function usageText(usage: AxonUsageStats): string {
-	return `$(dashboard) ${formatCredits(usage.usedCredits)} / ${formatCreditLimit(usage.totalCredits)} Credits · ${formatUpdatedAt(usage.updatedAt)}`;
+/** 一条指标的简短文案：有总额显示「已用 / 总额」，只有余额显示「余额」，只有百分比显示「已用 x%」 */
+/** 金额带单位：$ / ¥ / € 这类符号放前面，其它（Credits 等）放后面 */
+function withUnit(value: number, unit?: string): string {
+	const n = formatCredits(value);
+	if (!unit) return n;
+	return /^[$¥€£]$/.test(unit) ? `${unit}${n}` : `${n} ${unit}`;
 }
 
-function usageTooltip(usage: AxonUsageStats, hasApiKey: boolean): string {
-	if (!hasApiKey) {
-		return "Axon 官方 Credits\n未配置 API Key，请前往 Provider 配置";
+/** 距离重置还有多久：「7 小时后重置」 */
+function resetText(resetAt: number, now = Date.now()): string {
+	const diff = resetAt - now;
+	if (diff <= 0) return `已于 ${new Date(resetAt).toLocaleString()} 重置`;
+	const minutes = Math.round(diff / 60_000);
+	const text = minutes < 60 ? `${Math.max(1, minutes)} 分钟` : minutes < 48 * 60 ? `${Math.round(minutes / 60)} 小时` : `${Math.round(minutes / 1440)} 天`;
+	return `${text}后重置`;
+}
+
+function metricText(metric: QuotaMetric): string {
+	if (metric.total !== undefined && metric.used !== undefined) return `${withUnit(metric.used, metric.unit)} / ${withUnit(metric.total, metric.unit)}`;
+	if (metric.remaining !== undefined) return `剩余 ${withUnit(metric.remaining, metric.unit)}`;
+	if (metric.percent !== undefined) return `已用 ${metric.percent}%`;
+	return metric.used !== undefined ? `已用 ${withUnit(metric.used, metric.unit)}` : "—";
+}
+
+/** 主数值之外的补充：有总额补「剩余」，余额补「累计已用」，再加重置时间 */
+function metricExtra(metric: QuotaMetric): string {
+	const parts: string[] = [];
+	if (metric.total !== undefined && metric.remaining !== undefined) parts.push(`剩余 ${withUnit(metric.remaining, metric.unit)}`);
+	else if (metric.total === undefined && metric.remaining !== undefined && metric.used !== undefined) parts.push(`累计已用 ${withUnit(metric.used, metric.unit)}`);
+	if (metric.resetAt) parts.push(resetText(metric.resetAt));
+	return parts.join(" · ");
+}
+
+function metricDetail(metric: QuotaMetric): string {
+	const parts = [metricText(metric)];
+	if (metric.percent !== undefined && metric.total !== undefined) parts.push(`${metric.percent}%`);
+	const extra = metricExtra(metric);
+	if (extra) parts.push(extra);
+	return `${metric.label}：${parts.join(" · ")}`;
+}
+
+/** 账户用量弹窗的一行（已格式化好，弹窗只管排版） */
+interface UsageModalRow {
+	label: string;
+	value: string;
+	detail?: string;
+	percent?: number;
+}
+
+function modalRows(usage: AxonUsageStats): UsageModalRow[] | undefined {
+	if (!usage.metrics?.length) return undefined;
+	return usage.metrics.map((m) => ({
+		label: m.label,
+		value: metricText(m),
+		detail: metricExtra(m) || undefined,
+		percent: m.total !== undefined ? m.percent : undefined,
+	}));
+}
+
+function usageText(usage: AxonUsageStats, label: string, unit = "Credits"): string {
+	if (usage.metrics?.length && !usage.errorMessage) {
+		return `$(dashboard) ${label}: ${metricText(usage.metrics[0])} · ${formatUpdatedAt(usage.updatedAt)}`;
 	}
+	return `$(dashboard) ${label}: ${formatCredits(usage.usedCredits)} / ${formatCreditLimit(usage.totalCredits)} ${unit} · ${formatUpdatedAt(usage.updatedAt)}`;
+}
+
+function usageTooltip(usage: AxonUsageStats, label: string, unit = "Credits"): string {
 	if (usage.errorMessage) {
-		return `Axon 官方 Credits\n获取用量失败：${usage.errorMessage}`;
+		return `${label} 额度\n获取用量失败：${usage.errorMessage}`;
+	}
+	if (usage.metrics?.length) {
+		return `${label} 用量\n${usage.metrics.map(metricDetail).join("\n")}\n最近更新：${formatUpdatedAt(usage.updatedAt)}`;
 	}
 	return usage.updatedAt
-		? `Axon 官方 Credits\n已使用：${formatCredits(usage.usedCredits)}\n总额度：${formatCreditLimit(usage.totalCredits)}\n最近更新：${formatUpdatedAt(usage.updatedAt)}`
-		: "Axon 官方 Credits\n等待官方用量接口返回数据";
+		? `${label} 额度\n已使用：${formatCredits(usage.usedCredits)} ${unit}\n总额度：${formatCreditLimit(usage.totalCredits)} ${unit}\n最近更新：${formatUpdatedAt(usage.updatedAt)}`
+		: `${label} 额度\n等待额度接口返回数据`;
 }
 
 /** 读取 Axon 官方 key：优先用户级 providers.json，其次兼容环境变量。 */
@@ -159,7 +227,7 @@ export function registerAxonStatusBar(context: vscode.ExtensionContext): vscode.
  * 注册底部状态栏的 Credits 展示，并返回后续接口可调用的更新句柄。
  * 当前不发起任何网络请求；官方用量接口接入后调用 controller.setUsage 即可。
  */
-export function registerAxonUsageStatusBar(context: vscode.ExtensionContext): AxonUsageStatusBar {
+export function registerAxonUsageStatusBar(context: vscode.ExtensionContext, workspace = homedir()): AxonUsageStatusBar {
 	const item = vscode.window.createStatusBarItem(
 		"axon.usage",
 		// 右侧状态栏中 priority 越大越靠左；101 会显示在 Axon(100) 左边且保持独立按钮。
@@ -167,6 +235,9 @@ export function registerAxonUsageStatusBar(context: vscode.ExtensionContext): Ax
 		101,
 	);
 	let usage: AxonUsageStats = { usedCredits: 0, totalCredits: 0, updatedAt: null };
+	let activeProvider = "axon";
+	let activeLabel = "Axon 官方";
+	let activeUnit = "Credits";
 	currentUsageSnapshot = usage;
 	let disposed = false;
 	const refreshUsageTimer = setInterval(() => {
@@ -174,14 +245,14 @@ export function registerAxonUsageStatusBar(context: vscode.ExtensionContext): Ax
 	}, USAGE_REFRESH_INTERVAL_MS);
 	const renderRelativeTimeTimer = setInterval(() => {
 		if (disposed) return;
-		item.text = usageText(usage);
-		item.tooltip = usageTooltip(usage, !!readAxonApiKey());
+		item.text = usageText(usage, activeLabel, activeUnit);
+		item.tooltip = usageTooltip(usage, activeLabel, activeUnit);
 		updateUsageCommand(item);
 	}, USAGE_RELATIVE_TIME_RENDER_INTERVAL_MS);
 
-	item.name = "Axon Credits 用量";
-	item.text = usageText(usage);
-	item.tooltip = usageTooltip(usage, !!readAxonApiKey());
+	item.name = "Axon 额度用量";
+	item.text = usageText(usage, activeLabel, activeUnit);
+	item.tooltip = usageTooltip(usage, activeLabel, activeUnit);
 	updateUsageCommand(item);
 	item.show();
 	context.subscriptions.push(item, {
@@ -199,49 +270,49 @@ export function registerAxonUsageStatusBar(context: vscode.ExtensionContext): Ax
 				updatedAt: Date.now(),
 			};
 			currentUsageSnapshot = usage;
-			item.text = usageText(usage);
-			item.tooltip = usageTooltip(usage, true);
+			item.text = usageText(usage, activeLabel, activeUnit);
+			item.tooltip = usageTooltip(usage, activeLabel, activeUnit);
 			updateUsageCommand(item);
 		},
 		clearUsage() {
 			usage = { usedCredits: 0, totalCredits: 0, updatedAt: null };
 			currentUsageSnapshot = usage;
-			item.text = usageText(usage);
-			item.tooltip = usageTooltip(usage, !!readAxonApiKey());
+			item.text = usageText(usage, activeLabel, activeUnit);
+			item.tooltip = usageTooltip(usage, activeLabel, activeUnit);
 			updateUsageCommand(item);
 		},
 		async refresh() {
-			const apiKey = readAxonApiKey();
-			if (!apiKey) {
-				usage = { ...usage, errorMessage: undefined };
-				currentUsageSnapshot = usage;
-				item.tooltip = usageTooltip(usage, false);
-				updateUsageCommand(item);
-				return;
-			}
-			const origin = usageApiOrigin(readAxonBaseUrl());
 			try {
-				const response = await fetch(`${origin}/user/api/usage`, {
-					headers: {
-						accept: "application/json",
-						authorization: `Bearer ${apiKey}`,
-					},
-				});
-				if (!response.ok) {
-					const text = await response.text().catch(() => "");
-					throw new Error(text ? `HTTP ${response.status} - ${text}` : `HTTP ${response.status}`);
-				}
-				const data = await response.json() as AxonUsageApiResponse;
-				const creditLimit = typeof data.creditLimit === "number" ? data.creditLimit : Number(data.creditLimit);
-				const totalCredits = typeof data.totalCredits === "number" ? data.totalCredits : Number(data.totalCredits);
-				if (!Number.isFinite(creditLimit) || !Number.isFinite(totalCredits)) throw new Error("用量响应字段无效");
-				controller.setUsage({ usedCredits: totalCredits, totalCredits: creditLimit });
+				const registry = new ProviderRegistry([workspace], createVSCodeAgentHost(), homedir());
+				const provider = (await refreshProviders(registry)).find((entry) => entry.name === activeProvider);
+				if (!provider?.quota || provider.quota.enabled === false) throw new Error("未配置用量查询（在 Provider 设置里点「自动识别」或选一个模板）");
+				activeLabel = provider.label;
+				const result = await queryProvider(provider, provider.quota, context.secrets);
+				const primary = result.metrics[0];
+				activeUnit = primary.unit || "Credits";
+				// 账户用量弹窗只认「已用 / 总额」：只有余额时把余额当总额、已用记 0
+				const total = primary.total ?? primary.remaining ?? 0;
+				const used = primary.used ?? (primary.total !== undefined && primary.remaining !== undefined ? primary.total - primary.remaining : 0);
+				controller.setUsage({ usedCredits: used, totalCredits: total });
+				usage = { ...usage, metrics: result.metrics };
+				currentUsageSnapshot = usage;
+				item.text = usageText(usage, activeLabel, activeUnit);
+				item.tooltip = usageTooltip(usage, activeLabel, activeUnit);
 			} catch (error) {
 				usage = { ...usage, errorMessage: (error as Error).message || "未知错误" };
 				currentUsageSnapshot = usage;
-				item.tooltip = usageTooltip(usage, true);
+				item.text = usageText(usage, activeLabel, activeUnit);
+				item.tooltip = usageTooltip(usage, activeLabel, activeUnit);
 				updateUsageCommand(item);
 			}
+		},
+		async setActiveProvider(provider) {
+			activeProvider = provider || "axon";
+			activeLabel = activeProvider;
+			activeUnit = "Credits";
+			usage = { usedCredits: 0, totalCredits: 0, updatedAt: null };
+			currentUsageSnapshot = usage;
+			await controller.refresh();
 		},
 		dispose() {
 			disposed = true;
@@ -251,22 +322,21 @@ export function registerAxonUsageStatusBar(context: vscode.ExtensionContext): Ax
 		},
 	};
 
+	// title / rows：弹窗显示当前 Provider 的名字和全部指标（余额、订阅额度……）；
+	// usage 保留给还不认识 rows 的旧版弹窗
+	const modalPayload = (loading: boolean) => ({
+		apiKey: "",
+		title: activeLabel,
+		rows: modalRows(currentUsageSnapshot),
+		updatedText: formatUpdatedAt(currentUsageSnapshot.updatedAt),
+		usage: currentUsageSnapshot,
+		errorMessage: currentUsageSnapshot.errorMessage,
+		loading,
+	});
 	context.subscriptions.push(vscode.commands.registerCommand("axon.usage.openModal", async () => {
-		const apiKey = readAxonApiKey();
-		await vscode.commands.executeCommand("axon.showAccountUsageModal", {
-			apiKey,
-			usage: currentUsageSnapshot,
-			errorMessage: currentUsageSnapshot.errorMessage,
-			loading: !!apiKey,
-		});
-		if (!apiKey) return;
+		await vscode.commands.executeCommand("axon.showAccountUsageModal", modalPayload(true));
 		await controller.refresh();
-		await vscode.commands.executeCommand("axon.updateAccountUsageModal", {
-			apiKey: readAxonApiKey(),
-			usage: currentUsageSnapshot,
-			errorMessage: currentUsageSnapshot.errorMessage,
-			loading: false,
-		});
+		await vscode.commands.executeCommand("axon.updateAccountUsageModal", modalPayload(false));
 	}));
 
 	void controller.refresh();

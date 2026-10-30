@@ -3,6 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+// allow-any-unicode-comment-file
+
 import { isAncestorOfActiveElement } from '../../../../../base/browser/dom.js';
 import { alert } from '../../../../../base/browser/ui/aria/aria.js';
 import { WorkbenchActionExecutedClassification, WorkbenchActionExecutedEvent } from '../../../../../base/common/actions.js';
@@ -911,7 +913,9 @@ export function registerChatActions() {
 			super({
 				id: 'axon.focusChat',
 				title: localize2('axon.focusChat', "Open Axon Chat"),
-				f1: true,
+				// 不设 f1：Axon 扩展的 contributes.commands 已声明同名命令（命令面板里显示为
+				// "Axon: 聚焦对话面板"）。这里再 addCommand 会让扩展加载时报
+				// "Command `axon.focusChat` already registered"。命令本身与快捷键照常注册。
 				keybinding: [
 					{
 						primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyI,
@@ -924,7 +928,9 @@ export function registerChatActions() {
 			const layoutService = accessor.get(IWorkbenchLayoutService);
 			const viewsService = accessor.get(IViewsService);
 			layoutService.setPartHidden(false, Parts.AUXILIARYBAR_PART);
-			viewsService.focusView('workbench.view.chat');
+			// Axon 扩展贡献的对话视图（apps/vscode-extension/package.json 的 views.axon-chat）。
+			// 原先调用的 viewsService.focusView 并不存在，快捷键一按就抛 TypeError。
+			return viewsService.openView('axon.chat', true);
 		}
 	});
 

@@ -7,30 +7,74 @@
 
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
+/* Axon ships its UI and monospace fonts with the product. */
+@font-face {
+	font-family: "Instrument Sans Variable";
+	font-style: normal;
+	font-display: swap;
+	font-weight: 400 700;
+	font-stretch: 75% 100%;
+	src: url("./instrument-sans-latin-standard-normal.woff2") format("woff2-variations");
+	unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+@font-face {
+	font-family: "Instrument Sans Variable";
+	font-style: normal;
+	font-display: swap;
+	font-weight: 400 700;
+	font-stretch: 75% 100%;
+	src: url("./instrument-sans-latin-ext-standard-normal.woff2") format("woff2-variations");
+	unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+
+@font-face {
+	font-family: "JetBrains Mono Variable";
+	font-style: normal;
+	font-display: swap;
+	font-weight: 100 800;
+	src: url("./jetbrains-mono-latin-wght-normal.woff2") format("woff2-variations");
+}
+
+@font-face {
+	font-family: "JetBrains Mono Variable";
+	font-style: normal;
+	font-display: swap;
+	font-weight: 100 800;
+	src: url("./jetbrains-mono-latin-ext-wght-normal.woff2") format("woff2-variations");
+}
+
 /* Font Families (with CJK support) */
 
-.monaco-workbench.mac { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
-.monaco-workbench.mac:lang(zh-Hans) { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif; }
-.monaco-workbench.mac:lang(zh-Hant) { font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", sans-serif; }
-.monaco-workbench.mac:lang(ja) { font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic Pro", sans-serif; }
-.monaco-workbench.mac:lang(ko) { font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Nanum Gothic", "AppleGothic", sans-serif; }
+.monaco-workbench.mac { font-family: "Instrument Sans Variable", "Instrument Sans", -apple-system, BlinkMacSystemFont, sans-serif; }
+.monaco-workbench.mac:lang(zh-Hans) { font-family: "Instrument Sans Variable", "Instrument Sans", "PingFang SC", "Hiragino Sans GB", sans-serif; }
+.monaco-workbench.mac:lang(zh-Hant) { font-family: "Instrument Sans Variable", "Instrument Sans", "PingFang TC", sans-serif; }
+.monaco-workbench.mac:lang(ja) { font-family: "Instrument Sans Variable", "Instrument Sans", "Hiragino Kaku Gothic Pro", sans-serif; }
+.monaco-workbench.mac:lang(ko) { font-family: "Instrument Sans Variable", "Instrument Sans", "Apple SD Gothic Neo", "Nanum Gothic", "AppleGothic", sans-serif; }
 
-.monaco-workbench.windows { font-family: "Segoe WPC", "Segoe UI", sans-serif; }
-.monaco-workbench.windows:lang(zh-Hans) { font-family: "Segoe WPC", "Segoe UI", "Microsoft YaHei", sans-serif; }
-.monaco-workbench.windows:lang(zh-Hant) { font-family: "Segoe WPC", "Segoe UI", "Microsoft Jhenghei", sans-serif; }
-.monaco-workbench.windows:lang(ja) { font-family: "Segoe WPC", "Segoe UI", "Yu Gothic UI", "Meiryo UI", sans-serif; }
-.monaco-workbench.windows:lang(ko) { font-family: "Segoe WPC", "Segoe UI", "Malgun Gothic", "Dotom", sans-serif; }
+.monaco-workbench.windows { font-family: "Instrument Sans Variable", "Instrument Sans", "Segoe UI", sans-serif; }
+.monaco-workbench.windows:lang(zh-Hans) { font-family: "Instrument Sans Variable", "Instrument Sans", "Microsoft YaHei", sans-serif; }
+.monaco-workbench.windows:lang(zh-Hant) { font-family: "Instrument Sans Variable", "Instrument Sans", "Microsoft Jhenghei", sans-serif; }
+.monaco-workbench.windows:lang(ja) { font-family: "Instrument Sans Variable", "Instrument Sans", "Yu Gothic UI", "Meiryo UI", sans-serif; }
+.monaco-workbench.windows:lang(ko) { font-family: "Instrument Sans Variable", "Instrument Sans", "Malgun Gothic", "Dotom", sans-serif; }
 
-/* Linux: add `system-ui` as first font and not `Ubuntu` to allow other distribution pick their standard OS font */
-.monaco-workbench.linux { font-family: system-ui, "Ubuntu", "Droid Sans", sans-serif; }
-.monaco-workbench.linux:lang(zh-Hans) { font-family: system-ui, "Ubuntu", "Droid Sans", "Source Han Sans SC", "Source Han Sans CN", "Source Han Sans", sans-serif; }
-.monaco-workbench.linux:lang(zh-Hant) { font-family: system-ui, "Ubuntu", "Droid Sans", "Source Han Sans TC", "Source Han Sans TW", "Source Han Sans", sans-serif; }
-.monaco-workbench.linux:lang(ja) { font-family: system-ui, "Ubuntu", "Droid Sans", "Source Han Sans J", "Source Han Sans JP", "Source Han Sans", sans-serif; }
-.monaco-workbench.linux:lang(ko) { font-family: system-ui, "Ubuntu", "Droid Sans", "Source Han Sans K", "Source Han Sans JR", "Source Han Sans", "UnDotum", "FBaekmuk Gulim", sans-serif; }
+.monaco-workbench.linux { font-family: "Instrument Sans Variable", "Instrument Sans", system-ui, "Ubuntu", "Droid Sans", sans-serif; }
+.monaco-workbench.linux:lang(zh-Hans) { font-family: "Instrument Sans Variable", "Instrument Sans", "Source Han Sans SC", "Source Han Sans CN", "Source Han Sans", sans-serif; }
+.monaco-workbench.linux:lang(zh-Hant) { font-family: "Instrument Sans Variable", "Instrument Sans", "Source Han Sans TC", "Source Han Sans TW", "Source Han Sans", sans-serif; }
+.monaco-workbench.linux:lang(ja) { font-family: "Instrument Sans Variable", "Instrument Sans", "Source Han Sans J", "Source Han Sans JP", "Source Han Sans", sans-serif; }
+.monaco-workbench.linux:lang(ko) { font-family: "Instrument Sans Variable", "Instrument Sans", "Source Han Sans K", "Source Han Sans JR", "Source Han Sans", "UnDotum", "FBaekmuk Gulim", sans-serif; }
 
-.monaco-workbench.mac { --monaco-monospace-font: "SF Mono", Monaco, Menlo, Courier, monospace; }
-.monaco-workbench.windows { --monaco-monospace-font: Consolas, "Courier New", monospace; }
-.monaco-workbench.linux { --monaco-monospace-font: "Ubuntu Mono", "Liberation Mono", "DejaVu Sans Mono", "Courier New", monospace; }
+.monaco-workbench.mac,
+.monaco-workbench.windows,
+.monaco-workbench.linux {
+	--monaco-monospace-font: "JetBrains Mono Variable", "JetBrains Mono", monospace;
+}
+
+/* Axon workspace is a product brand, not a generic pane category. Keep its intended casing. */
+.monaco-workbench .part[data-active-composite-id="axon-manage"] > .title > .title-label h2,
+.monaco-workbench .part[data-active-composite-id="axon-chat"] > .title > .title-label h2 {
+	text-transform: none;
+}
 
 /* Global Styles */
 

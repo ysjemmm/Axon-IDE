@@ -20,7 +20,6 @@ import { AgentService } from './agentService.js';
 import { IAgentConfigurationService } from './agentConfigurationService.js';
 import { IAgentHostCompletions } from './agentHostCompletions.js';
 import { IAgentHostTerminalManager } from './agentHostTerminalManager.js';
-import { CopilotAgent } from './copilot/copilotAgent.js';
 import { CopilotApiService, ICopilotApiService } from './shared/copilotApiService.js';
 import { ClaudeAgent } from './claude/claudeAgent.js';
 import { ClaudeAgentSdkService, IClaudeAgentSdkService } from './claude/claudeAgentSdkService.js';
@@ -142,9 +141,8 @@ async function startAgentHost(): Promise<void> {
 		const gitService = instantiationService.createInstance(AgentHostGitService);
 		diServices.set(IAgentHostGitService, gitService);
 		// Checkpoint service depends on session data + git services, so
-		// construct it AFTER both are registered. Consumed by CopilotAgent
-		// (baseline capture) and AgentService's inner DI (changeset
-		// pipeline / end-of-turn capture).
+		// construct it AFTER both are registered. Consumed by AgentService's
+		// inner DI (changeset pipeline / end-of-turn capture).
 		const checkpointService = disposables.add(instantiationService.createInstance(AgentHostCheckpointService));
 		diServices.set(IAgentHostCheckpointService, checkpointService);
 		const copilotApiService = instantiationService.createInstance(CopilotApiService, undefined);
@@ -164,7 +162,9 @@ async function startAgentHost(): Promise<void> {
 		diServices.set(IAgentHostTerminalManager, agentService.terminalManager);
 		diServices.set(IAgentConfigurationService, agentService.configurationService);
 		diServices.set(IAgentHostCompletions, agentService.completionsService);
-		agentService.registerProvider(instantiationService.createInstance(CopilotAgent));
+		// Axon: CopilotAgent is intentionally not registered. Its @github/copilot-sdk dependency
+		// was removed together with Copilot (1ba0099a); importing it throws ERR_MODULE_NOT_FOUND
+		// at load time and takes the whole agent host process down.
 		// The Claude agent provider is opt-in. Gated on the
 		// `chat.agentHost.claudeAgent.path` workbench setting being non-empty,
 		// forwarded by the agent host starters as `VSCODE_AGENT_HOST_CLAUDE_SDK_PATH`.

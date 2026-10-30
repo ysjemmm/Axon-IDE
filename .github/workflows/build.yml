@@ -40,6 +40,28 @@ jobs:
         id: pkg
         run: echo "version=$(node -p "require('./product.json').version")" >> "$GITHUB_OUTPUT"
 
+      # 手填的 release_tag 若版本部分与 product.json.version 不一致，直接失败。
+      # 安装包报告的版本取自 product.json，而更新检查拿 release tag 的版本部分与之比较；
+      # 两者不一致时，更新检查会永远判定「有新版本」，用户装完仍被反复提示升级。
+      - name: Verify release tag matches product version
+        run: |
+          tag="${{ inputs.release_tag }}"
+          if [ -z "$tag" ]; then
+            echo "::notice::未指定 release_tag，将按 product.json 版本自动生成 tag，跳过校验"
+            exit 0
+          fi
+          tagver="${tag#v}"
+          tagver="${tagver%%-*}"
+          pkgver="${{ steps.pkg.outputs.version }}"
+          if [ "$tagver" != "$pkgver" ]; then
+            echo "::error::release_tag 的版本部分 ($tagver) 与 product.json.version ($pkgver) 不一致"
+            echo "安装包报告的版本取自 product.json，更新检查用 release tag 的版本部分与之比较，"
+            echo "两者不一致会导致用户装上之后仍被反复提示升级。"
+            echo "请二选一：把 release_tag 改成 $pkgver（或 v$pkgver-build.N），或把 product.json 的 version 改成 $tagver。"
+            exit 1
+          fi
+          echo "校验通过：release_tag 版本部分 ($tagver) == product.json.version ($pkgver)"
+
       - name: Resolve release tag
         id: release
         run: |
@@ -68,7 +90,19 @@ jobs:
     runs-on: windows-2025
     needs: prepare-release
     timeout-minutes: 120
+    env:
+      # 只装桌面安装包用得到的依赖（见 build/npm/dirs.ts）
+      AXON_DESKTOP_PACKAGE_ONLY: '1'
     steps:
+      # GitHub 的 Windows 构建机默认开着 Defender 实时扫描，npm install 解出的每个文件都要过一遍，
+      # 依赖安装、原生模块编译因此慢好几倍。构建机用完即销毁；关不掉也不影响构建（continue-on-error）。
+      - name: Disable Windows Defender real-time scanning
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true
+          Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE", "$env:RUNNER_TEMP", "$env:USERPROFILE"
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
@@ -91,22 +125,43 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
+          # npm 下载缓存（~/.npm）：Axon 前端等每次 npm install 不用重新下载
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v3
 
       - name: Install Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
+      # 依赖 + 原生模块编译产物缓存：lock 文件不变时，下面的 npm ci / 原生模块重编 / 扩展依赖安装
+      # （合计十几分钟）整段跳过。key 里带 lock 文件与安装脚本，任何一个变了都会重新装。
+      - name: Restore dependency cache
+        id: deps-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            build/node_modules
+            build/*/node_modules
+            build/npm/gyp/node_modules
+            extensions/node_modules
+            extensions/*/node_modules
+            extensions/*/server/node_modules
+          key: deps-win32-x64-v1-${{ hashFiles('package-lock.json', 'build/package-lock.json', 'build/*/package-lock.json', 'extensions/package-lock.json', 'extensions/*/package-lock.json', 'extensions/*/server/package-lock.json', '.npmrc', 'build/npm/dirs.ts', 'build/npm/postinstall.ts', 'build/npm/preinstall.ts') }}
+
       - name: Install dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: npm ci --ignore-scripts
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Ensure node-gyp is resolvable for node-pty
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           npm install -g node-gyp
@@ -116,6 +171,7 @@ jobs:
           ln -sf "$NODE_GYP" node_modules/node-pty/node_modules/.bin/node-gyp
 
       - name: Install tsgo native binary
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: npm rebuild @typescript/native-preview
         shell: bash
 
@@ -128,12 +184,14 @@ jobs:
           echo "VS2022_INSTALL=$vsPath" >> $env:GITHUB_ENV
 
       - name: Setup native build environment
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: node build/npm/preinstall.ts
         shell: bash
         env:
           vs2022_install: ${{ env.VS2022_INSTALL }}
 
       - name: Copy conpty DLLs into build/Release
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           # npm ci --ignore-scripts skips postinstall which copies
@@ -149,6 +207,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
 
       - name: Rebuild native addons for Electron (x64)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: |
           # @electron/rebuild --force wipes build/Release entirely, then only
           # rebuilds .node files via node-gyp. Prebuilt DLLs (conpty.dll) are lost.
@@ -167,6 +226,7 @@ jobs:
         shell: bash
 
       - name: Install extension dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         run: node build/npm/postinstall.ts
         shell: bash
         env:
@@ -174,6 +234,7 @@ jobs:
           npm_command: install
 
       - name: Verify and retry critical extension dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -198,6 +259,24 @@ jobs:
               failed+=("$ext")
             fi
           done
+          # 除上面的 esbuild 关键扩展外，再扫描所有把类型查找限定在本地 node_modules/@types
+          # 的扩展（tsconfig 的 typeRoots 指向 ./node_modules/@types，上游写法，共 30 个）。
+          # 这类扩展一旦被 postinstall 并发安装漏掉，tsgo 会直接报
+          # TS2688「Cannot find type definition file for 'node'」；而 esbuild 仍能从仓库
+          # 根目录解析到运行时依赖，所以打包阶段一切正常，问题只在 gulp 的 typecheck 才炸。
+          # php-language-features 就是这样在 Windows 上整条构建失败的。
+          for tsconfig in $(grep -rl 'node_modules/@types' extensions/*/tsconfig.json 2>/dev/null || true); do
+            ext="$(dirname "$tsconfig")"
+            case " ${failed[*]} " in *" $ext "*) continue ;; esac
+            if [ ! -d "$ext/node_modules/@types" ]; then
+              echo "::warning::Missing $ext/node_modules/@types (required by its tsconfig typeRoots)"
+              failed+=("$ext")
+            elif grep -q '"node"' "$tsconfig" && [ ! -d "$ext/node_modules/@types/node" ]; then
+              # 整个 @types 在、但 @types/node 单独缺失（两者报的错完全一样），一并覆盖
+              echo "::warning::Missing $ext/node_modules/@types/node (declared in its tsconfig types)"
+              failed+=("$ext")
+            fi
+          done
           if [ ${#failed[@]} -gt 0 ]; then
             echo "::notice::Retrying npm install for ${#failed[@]} extension(s) that postinstall missed..."
             for ext in "${failed[@]}"; do
@@ -210,6 +289,21 @@ jobs:
           else
             echo "All critical extensions have node_modules."
           fi
+
+      # 依赖装完、构建还没动 node_modules 之前存缓存（只在没命中时存）
+      - name: Save dependency cache
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            node_modules
+            build/node_modules
+            build/*/node_modules
+            build/npm/gyp/node_modules
+            extensions/node_modules
+            extensions/*/node_modules
+            extensions/*/server/node_modules
+          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
 
       - name: Build Axon extension bundle
         shell: bash
@@ -258,8 +352,9 @@ jobs:
             exit 1
           }
 
+      # -min：官方发布用的压缩构建（esbuild minify，无 mangling），out/ 约 86MB -> 35MB，功能不变
       - name: Build & Package
-        run: npm run gulp vscode-win32-x64
+        run: npm run gulp vscode-win32-x64-min
         shell: bash
 
       - name: Copy Axon extension into packaged app
@@ -284,6 +379,13 @@ jobs:
           $conpty = Join-Path $appDir "resources\app\node_modules\node-pty\build\Release\conpty\conpty.dll"
           if (Test-Path $conpty) { Write-Host "OK: conpty.dll" } else { Write-Error "MISSING: conpty.dll — terminal will fail"; exit 1 }
 
+      # 删掉用户用不到的文件（source map、其他平台/架构的原生二进制、中英文以外的 Chromium 语言包），见脚本注释
+      - name: Slim packaged app
+        shell: bash
+        run: |
+          app_dir="$(dirname "$PWD")/VSCode-win32-x64"
+          bash build/axon/slim-package.sh "$app_dir" "$app_dir/resources/app" win32 x64
+
       - name: Create portable zip
         shell: pwsh
         run: |
@@ -301,7 +403,9 @@ jobs:
         run: |
           $appDir = Join-Path (Split-Path $PWD -Parent) "VSCode-win32-x64"
           $outDir = "$PWD\.build"
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppDir="$appDir" /DOutputDir="$outDir" build\win32\axon-ide.iss
+          # 安装器的 AppVersion 也从 product.json 读，保证与 About 对话框、发布 tag 同源
+          $appVersion = (Get-Content product.json -Raw | ConvertFrom-Json).version
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppDir="$appDir" /DOutputDir="$outDir" /DAppVersion="$appVersion" build\win32\axon-ide.iss
           Write-Host "Installer: $outDir\Axon-IDE-win32-x64-setup.exe ($((Get-Item "$outDir\Axon-IDE-win32-x64-setup.exe").Length) bytes)"
 
       - name: Upload artifacts
@@ -409,6 +513,20 @@ jobs:
               failed+=("$ext")
             fi
           done
+          # 同 Windows：补齐所有把类型查找限定在本地 node_modules/@types 的扩展，
+          # 避免 postinstall 漏装导致 tsgo 报 TS2688（详见 Windows 任务里的同段注释）。
+          for tsconfig in $(grep -rl 'node_modules/@types' extensions/*/tsconfig.json 2>/dev/null || true); do
+            ext="$(dirname "$tsconfig")"
+            case " ${failed[*]} " in *" $ext "*) continue ;; esac
+            if [ ! -d "$ext/node_modules/@types" ]; then
+              echo "::warning::Missing $ext/node_modules/@types (required by its tsconfig typeRoots)"
+              failed+=("$ext")
+            elif grep -q '"node"' "$tsconfig" && [ ! -d "$ext/node_modules/@types/node" ]; then
+              # 整个 @types 在、但 @types/node 单独缺失（两者报的错完全一样），一并覆盖
+              echo "::warning::Missing $ext/node_modules/@types/node (declared in its tsconfig types)"
+              failed+=("$ext")
+            fi
+          done
           if [ ${#failed[@]} -gt 0 ]; then
             echo "::notice::Retrying npm install for ${#failed[@]} extension(s) that postinstall missed..."
             for ext in "${failed[@]}"; do
@@ -467,12 +585,15 @@ jobs:
         run: |
           test -f extensions/axon-ide/dist/extension.js || (echo "Missing extensions/axon-ide/dist/extension.js" && exit 1)
 
+      # -min：官方发布用的压缩构建（esbuild minify，无 mangling），out/ 约 86MB -> 35MB，功能不变
       - name: Build & Package
-        run: npm run gulp vscode-darwin-arm64
+        run: npm run gulp vscode-darwin-arm64-min
 
       - name: Copy Axon extension into packaged app
         run: |
-          app_ext="$(dirname "$PWD")/VSCode-darwin-arm64/resources/app/extensions/axon-ide"
+          # macOS 的应用资源在 .app 包里；早先写成 Windows 的 resources/app，拷到了包外面，
+          # 白白在 portable zip 里多出一份 85MB 的顶层 resources/
+          app_ext="$(dirname "$PWD")/VSCode-darwin-arm64/Axon IDE.app/Contents/Resources/app/extensions/axon-ide"
           mkdir -p "$app_ext"
           cp -R extensions/axon-ide/dist "$app_ext/"
           cp extensions/axon-ide/package.json "$app_ext/"
@@ -481,12 +602,20 @@ jobs:
       - name: Verify packaged Axon extension
         run: |
           app_dir="$(dirname "$PWD")/VSCode-darwin-arm64"
-          extension_js="$app_dir/resources/app/extensions/axon-ide/dist/extension.js"
+          extension_js="$app_dir/Axon IDE.app/Contents/Resources/app/extensions/axon-ide/dist/extension.js"
           test -f "$extension_js" || (echo "Packaged Axon extension is missing: $extension_js" && exit 1)
+
+      # 必须在签名之前：删 Electron Framework 里的语言包会改动被签名的文件
+      - name: Slim packaged app
+        run: |
+          app_dir="$(dirname "$PWD")/VSCode-darwin-arm64"
+          bash build/axon/slim-package.sh "$app_dir" "$app_dir/Axon IDE.app/Contents/Resources/app" darwin arm64
 
       - name: Ad-hoc sign (arm64)
         run: |
           APP="$(dirname "$PWD")/VSCode-darwin-arm64/Axon IDE.app"
+          # 语音输入要用麦克风：Info.plist 必须写明用途，否则系统不弹授权、直接给静音
+          plutil -replace NSMicrophoneUsageDescription -string "Axon IDE 需要使用麦克风进行语音输入。" "$APP/Contents/Info.plist"
           echo "Signing: $APP"
           codesign --force --deep --sign - "$APP"
           echo "Verify:"
@@ -497,7 +626,9 @@ jobs:
           src=$(dirname "$PWD")/VSCode-darwin-arm64
           dst="$PWD/.build/Axon-IDE-darwin-arm64-portable.zip"
           mkdir -p "$PWD/.build"
-          cd "$src" && zip -r "$dst" .
+          # ditto 保留 .framework 里的符号链接与签名。早先 zip -r 会把符号链接展开成实体文件，
+          # Electron Framework 被存了 3~4 份（zip 里 800MB），解压后签名也对不上
+          cd "$src" && ditto -c -k --sequesterRsrc --keepParent "Axon IDE.app" "$dst"
           echo "Portable zip: $dst ($(stat -f%z "$dst") bytes)"
 
       - name: Create DMG installer
@@ -588,11 +719,19 @@ jobs:
           npm_command: install
 
       - name: Build & Package
-        run: npm run gulp vscode-darwin-x64
+        run: npm run gulp vscode-darwin-x64-min
+
+      # 必须在签名之前：删 Electron Framework 里的语言包会改动被签名的文件
+      - name: Slim packaged app
+        run: |
+          app_dir="$(dirname "$PWD")/VSCode-darwin-x64"
+          bash build/axon/slim-package.sh "$app_dir" "$app_dir/Axon IDE.app/Contents/Resources/app" darwin x64
 
       - name: Ad-hoc sign (x64)
         run: |
           APP="$(dirname "$PWD")/VSCode-darwin-x64/Axon IDE.app"
+          # 语音输入要用麦克风：Info.plist 必须写明用途，否则系统不弹授权、直接给静音
+          plutil -replace NSMicrophoneUsageDescription -string "Axon IDE 需要使用麦克风进行语音输入。" "$APP/Contents/Info.plist"
           echo "Signing: $APP"
           codesign --force --deep --sign - "$APP"
           echo "Verify:"
@@ -603,7 +742,9 @@ jobs:
           src=$(dirname "$PWD")/VSCode-darwin-x64
           dst="$PWD/.build/Axon-IDE-darwin-x64-portable.zip"
           mkdir -p "$PWD/.build"
-          cd "$src" && zip -r "$dst" .
+          # ditto 保留 .framework 里的符号链接与签名。早先 zip -r 会把符号链接展开成实体文件，
+          # Electron Framework 被存了 3~4 份（zip 里 800MB），解压后签名也对不上
+          cd "$src" && ditto -c -k --sequesterRsrc --keepParent "Axon IDE.app" "$dst"
           echo "Portable zip: $dst ($(stat -f%z "$dst") bytes)"
 
       - name: Create DMG installer

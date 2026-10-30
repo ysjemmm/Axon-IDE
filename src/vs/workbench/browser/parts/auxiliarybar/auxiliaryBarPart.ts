@@ -35,6 +35,9 @@ import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { VisibleViewContainersTracker } from '../visibleViewContainersTracker.js';
 import { Extensions } from '../../panecomposite.js';
 
+/** Axon 对话面板所在的视图容器（扩展容器注册为 `workbench.view.extension.<id>`） */
+const AXON_CHAT_CONTAINER_ID = 'workbench.view.extension.axon-chat';
+
 interface IAuxiliaryBarPartConfiguration {
 	position: ActivityBarPosition;
 
@@ -145,6 +148,44 @@ export class AuxiliaryBarPart extends AbstractPaneCompositePart {
 				this.onDidChangeActivityBarLocation();
 			}
 		}));
+
+		// Axon：对话面板激活时隐藏整行标题栏并把高度让给内容区
+		this._register(this.onDidPaneCompositeOpen(() => this.updateAxonChatActive()));
+		this._register(this.onDidPaneCompositeClose(() => this.updateAxonChatActive()));
+	}
+
+	/**
+	 * Axon：对话面板自带一行会话切换器（会话名 + 新建/历史 + Chat/Code 切换），
+	 * 原生标题栏（"AXON WORKSPACE" 那行）与之重复，整行隐藏，高度让给会话内容。
+	 */
+	private isAxonChatActive(): boolean {
+		// 仅限默认位置（composite bar 在标题栏里）：活动栏放 top/bottom 时另有 header/footer，不在此处理
+		return this.getCompositeBarPosition() === CompositeBarPosition.TITLE
+			&& this.getActiveComposite()?.getId() === AXON_CHAT_CONTAINER_ID;
+	}
+
+	private updateAxonChatActive(): void {
+		const element = this.element as HTMLElement | undefined;
+		if (!element) {
+			return;
+		}
+		const active = this.isAxonChatActive();
+		element.classList.toggle('axon-chat-active', active);
+
+		// 只用 CSS 藏掉标题栏不够：PartLayout 仍按 hasTitle 预留 35px，内容区（连同 webview）会短一截，
+		// 底部留出一条空白。直接改 hasTitle，让 PartLayout 算出的内容尺寸本身就是满高——
+		// 这样 CompositePart 缓存的 contentAreaSize 也是满高，showComposite 等复用缓存的路径不会再按短尺寸排布。
+		// 标题区 DOM 在 create() 时已建好，之后改 hasTitle 只影响布局计算。
+		const options = this.options as { hasTitle?: boolean };
+		if (options.hasTitle === !active) {
+			return;
+		}
+		options.hasTitle = !active;
+		const dimension = this.dimension;
+		const position = this.contentPosition;
+		if (dimension && position) {
+			this.layout(dimension.width, dimension.height, position.top, position.left);
+		}
 	}
 
 	private onDidChangeAutoHideViewContainers(e: { before: number; after: number }): void {
@@ -170,6 +211,7 @@ export class AuxiliaryBarPart extends AbstractPaneCompositePart {
 
 	private onDidChangeActivityBarLocation(): void {
 		this.updateCompositeBar();
+		this.updateAxonChatActive();
 
 		const id = this.getActiveComposite()?.getId();
 		if (id) {

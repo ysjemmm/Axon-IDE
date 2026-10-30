@@ -3,10 +3,14 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+// allow-any-unicode-comment-file
+
 import * as nls from '../../../../nls.js';
 import severity from '../../../../base/common/severity.js';
 import { Disposable, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
+import { FileAccess } from '../../../../base/common/network.js';
+import { dirname } from '../../../../base/common/resources.js';
 import { IActivityService, NumberBadge, IBadge, ProgressBadge } from '../../../services/activity/common/activity.js';
 import { IInstantiationService, ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
@@ -48,28 +52,20 @@ export function showReleaseNotesInEditor(instantiationService: IInstantiationSer
 	return releaseNotesManager.show(version, useCurrentFile);
 }
 
-async function openLatestReleaseNotesInBrowser(accessor: ServicesAccessor) {
-	const openerService = accessor.get(IOpenerService);
-	const productService = accessor.get(IProductService);
-
-	if (productService.releaseNotesUrl) {
-		const uri = URI.parse(productService.releaseNotesUrl);
-		await openerService.open(uri);
-	} else {
-		throw new Error(nls.localize('update.noReleaseNotesOnline', "This version of {0} does not have release notes online", productService.nameLong));
-	}
-}
-
 export async function showReleaseNotes(accessor: ServicesAccessor, version: string) {
 	// Axon: 在编辑器内打开本地 RELEASE_NOTES.md
-	const instantiationService = accessor.get(IInstantiationService);
-	const environmentService = accessor.get(IBrowserWorkbenchEnvironmentService);
+	// ServicesAccessor 只在同步阶段有效，所有服务必须在第一个 await 之前取出
+	// （原先在 await 之后才 get IProductService / IOpenerService，走到浏览器兜底时会抛错）。
 	const editorService = accessor.get(IEditorService);
 	const fileService = accessor.get(IFileService);
+	const productService = accessor.get(IProductService);
+	const openerService = accessor.get(IOpenerService);
 
-	// 获取安装目录下的 RELEASE_NOTES.md
-	const installPath = URI.file(environmentService.appRoot);
-	const releaseNotesUri = URI.joinPath(installPath, 'RELEASE_NOTES.md');
+	// 获取 appRoot 下的 RELEASE_NOTES.md。
+	// 浏览器层的环境服务类型上没有 appRoot（只在 INativeEnvironmentService 上），
+	// 这里按上游惯例由 FileAccess 反推：asFileUri('') 指向 out/，其上一级即 appRoot。
+	const appRoot = dirname(FileAccess.asFileUri(''));
+	const releaseNotesUri = URI.joinPath(appRoot, 'RELEASE_NOTES.md');
 
 	try {
 		// 检查文件是否存在
@@ -89,9 +85,7 @@ export async function showReleaseNotes(accessor: ServicesAccessor, version: stri
 	}
 
 	// fallback：打开浏览器跳转到 GitHub Releases
-	const productService = accessor.get(IProductService);
 	if (productService.releaseNotesUrl) {
-		const openerService = accessor.get(IOpenerService);
 		await openerService.open(URI.parse(productService.releaseNotesUrl));
 	}
 }

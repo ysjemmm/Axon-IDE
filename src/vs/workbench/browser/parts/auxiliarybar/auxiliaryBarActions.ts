@@ -91,7 +91,11 @@ MenuRegistry.appendMenuItem(MenuId.AuxiliaryBarTitle, {
 	},
 	group: 'navigation',
 	order: 2,
-	when: ContextKeyExpr.equals(`config.${LayoutSettings.ACTIVITY_BAR_LOCATION}`, ActivityBarPosition.DEFAULT)
+	when: ContextKeyExpr.and(
+		ContextKeyExpr.equals(`config.${LayoutSettings.ACTIVITY_BAR_LOCATION}`, ActivityBarPosition.DEFAULT),
+		// Extension view containers are registered as `workbench.view.extension.<id>`.
+		ContextKeyExpr.notEquals('activeAuxiliary', 'workbench.view.extension.axon-chat')
+	)
 });
 
 registerAction2(class extends Action2 {

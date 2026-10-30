@@ -5,7 +5,6 @@
 
 import { mkdir } from 'fs/promises';
 import { dirname, join } from '../../../../base/common/path.js';
-import type { TelemetryConfig } from '@github/copilot-sdk';
 import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { INativeEnvironmentService } from '../../../environment/common/environment.js';
@@ -20,7 +19,8 @@ import {
 } from '../../../otel/node/otlp/outboundForwarder.js';
 import { OTelSqliteStore } from '../../../otel/node/sqlite/otelSqliteStore.js';
 import { AgentHostOTelSpansDbSubPath } from '../../common/agentService.js';
-import { IAgentHostOTelService } from '../../common/otel/agentHostOTelService.js';
+// Axon: @github/copilot-sdk was removed; its TelemetryConfig is replaced by the structurally identical type declared in the common layer.
+import { IAgentHostOTelService, type IAgentHostSdkTelemetryConfig as TelemetryConfig } from '../../common/otel/agentHostOTelService.js';
 
 /** Sub-path under the user data directory where the span DB lives. */
 const SPANS_DB_SUBPATH = AgentHostOTelSpansDbSubPath;

@@ -194,6 +194,14 @@ export class UpdateTitleBarContribution extends Disposable implements IWorkbench
 			case StateType.Restarting:
 				this.context.set(true);
 				break;
+			case StateType.Ready:
+				// 下载已完成、只等用户重启安装：这是唯一一个"必须靠用户主动动作才能生效"的状态，
+				// 之前这里没有主动弹 tooltip，只是被动更新内容——用户不去点标题栏角标就完全
+				// 感知不到"更新其实还没真正装上"，体感就是"点了更新却什么都没发生"。
+				// 与 Downloading/Updating 等状态一致，主动弹一次提示。
+				showTooltip = true;
+				this.context.set(true);
+				break;
 		}
 
 		if (showTooltip) {

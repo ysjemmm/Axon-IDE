@@ -1,9 +1,16 @@
 /*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+// allow-any-unicode-comment-file
+
+/*
  *  Axon —— 终端选区「添加到对话」浮动按钮
  *
  *  在终端中选中文本并松开鼠标后，于选区附近浮出一个按钮；点击后把选中文本与行数
  *  通过命令 `axon.addTerminalSelectionToChat` 交给 Axon 扩展，由其注入到对话输入框成为上下文芯片。
- *--------------------------------------------------------------------------------------------*/
+ */
 
 import type { Terminal as RawXtermTerminal } from '@xterm/xterm';
 import * as dom from '../../../../../base/browser/dom.js';
@@ -23,7 +30,6 @@ const AUTO_HIDE_DELAY = 3000;
 export class TerminalAxonChatContribution extends Disposable implements ITerminalContribution {
 	static readonly ID = 'terminal.axonChat';
 
-	private _xterm: (IXtermTerminal & { raw: RawXtermTerminal }) | undefined;
 	/** 单例按钮 DOM（终端生命周期内复用，通过 display 切换可见性） */
 	private _btn: HTMLElement | undefined;
 	/** 自动消失定时器 */
@@ -39,7 +45,6 @@ export class TerminalAxonChatContribution extends Disposable implements ITermina
 	}
 
 	xtermOpen(xterm: IXtermTerminal & { raw: RawXtermTerminal }): void {
-		this._xterm = xterm;
 		const screen = this._ctx.instance.domElement ?? xterm.raw.element;
 		if (!screen) {
 			return;
@@ -47,6 +52,7 @@ export class TerminalAxonChatContribution extends Disposable implements ITermina
 
 		// 创建单例按钮（初始隐藏）
 		this._btn = dom.$('div.terminal-axon-add-btn');
+		// allow-any-unicode-next-line
 		this._btn.textContent = localize('axon.terminal.addToChat', "添加到 Axon");
 		this._btn.style.display = 'none';
 		screen.style.position = 'relative'; // 确保按钮相对终端区域定位
@@ -68,8 +74,9 @@ export class TerminalAxonChatContribution extends Disposable implements ITermina
 			if (e.button !== 0) {
 				return;
 			}
-			// 使用 requestAnimationFrame 等待 xterm 更新选区状态（比 setTimeout(0) 更精确且只执行一次）
-			requestAnimationFrame(() => {
+			// 使用 requestAnimationFrame 等待 xterm 更新选区状态（比 setTimeout(0) 更精确且只执行一次）。
+			// 按终端所在窗口调度：终端可能被拖到辅助窗口里。
+			dom.getWindow(screen).requestAnimationFrame(() => {
 				const text = this._ctx.instance.selection;
 				if (text && text.trim()) {
 					this._show(e.offsetX, e.offsetY);
@@ -115,6 +122,7 @@ export class TerminalAxonChatContribution extends Disposable implements ITermina
 			return;
 		}
 		const lineCount = text.replace(/\n$/, '').split('\n').length;
+		// allow-any-unicode-next-line
 		const terminalName = this._ctx.instance.title || '终端';
 		Promise.resolve(this._commandService.executeCommand(ADD_TO_CHAT_COMMAND_ID, { text, lineCount, terminalName }))
 			.then(undefined, () => { /* 忽略：命令不存在或扩展未就绪 */ });

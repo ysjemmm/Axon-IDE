@@ -142,6 +142,7 @@ export abstract class CompositePart<T extends Composite, MementoType extends obj
 
 		// Update Title
 		this.updateTitle(id);
+		this.element.dataset.activeCompositeId = id;
 
 		// Create composite
 		const composite = this.createComposite(id, true);

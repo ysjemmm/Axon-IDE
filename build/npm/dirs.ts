@@ -73,3 +73,16 @@ if (existsSync(`${import.meta.dirname}/../../.build/distro/npm`)) {
 	dirs.push('.build/distro/npm/remote');
 	dirs.push('.build/distro/npm/remote/web');
 }
+
+// Axon：CI 打桌面安装包时（AXON_DESKTOP_PACKAGE_ONLY=1）只装打包真正用到的依赖。
+// 远程服务端（remote 还要编译一遍原生模块）、测试、以及不进安装包的扩展（见 build/lib/extensions.ts
+// 的 excludedExtensions）的 npm install 在 Windows CI 上要好几分钟，打出来的包里却一个字节都用不上。
+// 本地开发不设这个变量，行为不变。
+if (process.env['AXON_DESKTOP_PACKAGE_ONLY']) {
+	const desktopUnused = /^(remote(\/.*)?|test\/.*|\.vscode\/extensions\/.*|extensions\/(copilot|vscode-api-tests|vscode-colorize-tests|vscode-colorize-perf-tests|vscode-test-resolver|grunt|gulp|jake|npm))$/;
+	for (let i = dirs.length - 1; i >= 0; i--) {
+		if (desktopUnused.test(dirs[i])) {
+			dirs.splice(i, 1);
+		}
+	}
+}

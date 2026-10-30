@@ -5,7 +5,7 @@
 	<meta charset="UTF-8">
 
 	<meta http-equiv="Content-Security-Policy"
-		content="default-src 'none'; script-src 'sha256-q+WTr+fBXpLLE3++yWNaxT6BTWQtsKscoeIlynBRk4E=' 'self'; frame-src 'self'; style-src 'unsafe-inline';">
+		content="default-src 'none'; script-src 'sha256-ZSjd0ZdvFOURAAz98rJHnBjzuq8LaUoY7a+6b3mZCco=' 'self'; frame-src 'self'; style-src 'unsafe-inline';">
 
 	<!-- Disable pinch zooming -->
 	<meta name="viewport"
@@ -1025,7 +1025,16 @@
 				}
 				newFrame.setAttribute('sandbox', Array.from(sandboxRules).join(' '));
 
-				const allowRules = ['cross-origin-isolated;', 'autoplay;', 'local-network-access;'];
+				// Axon: delegate local network access using only the Permissions-Policy tokens this
+				// browser recognizes. Chromium 148 renamed `local-network-access` to `local-network` +
+				// `loopback-network`; the old token is ignored and logs "Unrecognized feature".
+				// Mirrors getLocalNetworkAllowRules() in base/browser/browser.ts.
+				const featurePolicy = /** @type {{ featurePolicy?: { features(): string[] } }} */ (/** @type {unknown} */ (document)).featurePolicy;
+				const supportedFeatures = featurePolicy ? featurePolicy.features() : undefined;
+				const localNetworkRules = supportedFeatures
+					? ['local-network', 'loopback-network', 'local-network-access'].filter(feature => supportedFeatures.includes(feature))
+					: ['local-network-access'];
+				const allowRules = ['cross-origin-isolated;', 'autoplay;', ...localNetworkRules.map(rule => `${rule};`)];
 				if (!isFirefox && options.allowScripts) {
 					allowRules.push('clipboard-read;', 'clipboard-write;');
 				}

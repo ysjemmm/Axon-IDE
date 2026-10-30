@@ -144,6 +144,9 @@ function bundleESMTask(opts: IBundleESMTaskOpts): NodeJS.ReadWriteStream {
 				target: [target],
 				loader: {
 					'.ttf': 'file',
+					// 与 build/next/index.ts 保持一致：woff2 字体要按文件资源处理，否则 esbuild 报
+					// "No loader is configured for .woff2"。
+					'.woff2': 'file',
 					'.svg': 'file',
 					'.png': 'file',
 					'.sh': 'file',

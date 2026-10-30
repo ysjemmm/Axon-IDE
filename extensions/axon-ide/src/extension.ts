@@ -11,24 +11,29 @@
  * 因此 loadProviderEnv() 只需在"用户发第一条消息"之前执行即可——activate 里调一次足矣。
  */
 
+import { stopRecording } from "./voiceInput.js";
 import * as vscode from "vscode";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { SessionHub, type ControlCommand, type WorkspaceGroup, type CompactionUserConfig, type CreditBudgetUserConfig, webSearch, webFetch } from "@axon/core";
-import { DEFAULT_COMPACTION_CONFIG, DEFAULT_CREDIT_BUDGET_CONFIG } from "@axon/core";
+import { join, basename, dirname } from "node:path";
+import { readJsonConfig, writeJsonConfig } from "./safeConfigFile.js";
+import { SessionHub, type ControlCommand, type WorkspaceGroup, type CompactionUserConfig, type CreditBudgetUserConfig, webSearch, webFetch, setBuiltinPowersDir } from "@axon/core";
+import { DEFAULT_COMPACTION_CONFIG, DEFAULT_CREDIT_BUDGET_CONFIG, DEFAULT_TRACE_CONFIG, type TraceConfig } from "@axon/core";
 import { createVSCodeAgentHost, VSCodeCommandTrustStore } from "@axon/host-vscode";
-import { JsonFileStorage, createNodeMcpCapability } from "@axon/host-node";
+import { JsonFileStorage, closeAllBrowsers, createNodeMcpCapability, ensureFfmpeg, findFfmpeg, setMediaVendorDir, setImageProviderConfig } from "@axon/host-node";
+import type { ImageProviderConfig } from "@axon/host-node";
 import { loadProviderEnv } from "./loadEnv.js";
 import { VSCodeChannel } from "./vscodeChannel.js";
 import { AxonViewProvider } from "./viewProvider.js";
 import { RequestRouter, vscodeBrowse } from "./requestRouter.js";
 import { registerTreeViews } from "./treeViews.js";
-import { AgentEditor } from "./agentEditor.js";
 import { registerAxonStatusBar, registerAxonUsageStatusBar } from "./statusBar.js";
 import { openOrFocusPanel, postToPanel } from "./panelManager.js";
 import { registerGitBlameAnnotation } from "./gitBlameAnnotation.js";
 import { registerInlineCompletion } from "./inlineCompletion.js";
 import { registerAskAxonCodeAction } from "./codeActionProvider.js";
+import { showDiagLog } from "./webviewWatchdog.js";
+import { downloadGitHubDir, parseGitHubUrl } from "./skillUrlImport.js";
+import { createMarketplaceRegistry } from "./marketplaceBridge.js";
 
 /** 批量导入结果（单条） */
 interface ImportResult {
@@ -54,6 +59,7 @@ function readCompactionConfig(): CompactionUserConfig {
     keepRecentMessages: cfg.get<number>("keepRecentMessages", DEFAULT_COMPACTION_CONFIG.keepRecentMessages),
     toolResultPruneChars: cfg.get<number>("toolResultPruneChars", DEFAULT_COMPACTION_CONFIG.toolResultPruneChars),
     toolResultKeepTurns: cfg.get<number>("toolResultKeepTurns", DEFAULT_COMPACTION_CONFIG.toolResultKeepTurns),
+    autoCompactAt: cfg.get<string>("autoCompactAt", DEFAULT_COMPACTION_CONFIG.autoCompactAt) === "early" ? "early" : "auto",
   };
 }
 
@@ -68,6 +74,140 @@ function readCreditBudgetConfig(): CreditBudgetUserConfig {
     warnAt: cfg.get<number>("warnAt", DEFAULT_CREDIT_BUDGET_CONFIG.warnAt),
     pauseAt: cfg.get<number>("pauseAt", DEFAULT_CREDIT_BUDGET_CONFIG.pauseAt),
   };
+}
+
+/**
+ * 读取 VS Code 设置中的 trace 记录配置（axon.trace.*）。
+ * 读取时机：会话创建时（注入初始值）+ 设置变更时（热更新）。
+ *
+ * 关于「开关 + 等级」：这里合并成一个四档枚举（off / summary / normal / full），off 即关闭。
+ * 不拆成 enabled + level 两个设置 —— 那样会出现 "enabled=true 且 level=off" 这种
+ * 说不清以谁为准的组合，而一个下拉本身就同时充当了开关。
+ */
+function readTraceConfig(): Partial<TraceConfig> {
+  const cfg = vscode.workspace.getConfiguration("axon.trace");
+  return {
+    level: cfg.get<TraceConfig["level"]>("level", DEFAULT_TRACE_CONFIG.level),
+    maxFileMB: cfg.get<number>("maxFileMB", DEFAULT_TRACE_CONFIG.maxFileMB),
+    keepRecentFiles: cfg.get<number>("keepRecentFiles", DEFAULT_TRACE_CONFIG.keepRecentFiles),
+  };
+}
+
+/**
+ * 读取 VS Code 设置中的 Wiki 生成配置（axon.wiki.*）。
+ *
+ * ── 为什么放设置里、而不是 .axon/ 下 ──
+ * `.axon/wiki/` 是要【随 git 提交、团队共享】的 —— 那是 wiki 的核心价值。
+ * 而「用哪个 provider / 模型」是机器本地偏好：同事未必配了同一个 provider、未必有同名模型，
+ * 写进共享物只会让 clone 下来的人看到一堆用不了的模型名。
+ * 这与「mtime 快照不进 md、放被 gitignore 的 .state.json」是同一条判据：
+ * **机器本地事实不进共享物**。
+ *
+ * ── 为什么它需要独立于会话的模型选择 ──
+ * 侧栏按钮不属于任何对话面板，没有天然的「当前会话模型」；而它是本项目里最贵的单个操作
+ * （多页 × 每页多轮工具调用）。最贵的操作，配置不该靠猜。
+ */
+function readWikiConfig(): { provider: string; model: string; maxPages: number; tokenBudget?: number } {
+  const cfg = vscode.workspace.getConfiguration("axon.wiki");
+  // 0 / 未填 = 按页数自动估算（见 core 的 defaultWikiTokenBudget）
+  const budget = cfg.get<number>("tokenBudget", 0);
+  return {
+    provider: cfg.get<string>("provider", "") || "",
+    model: cfg.get<string>("model", "") || "",
+    maxPages: cfg.get<number>("maxPages", 15),
+    ...(budget > 0 ? { tokenBudget: budget } : {}),
+  };
+}
+
+/**
+ * 读取动画 / 视频生成开关（axon.media.enabled）。
+ *
+ * 默认关闭：这个能力要在本机备一份 ffmpeg（约 160MB）并驱动无头浏览器渲染，
+ * 属于重资产能力，不该在用户没表态时占磁盘和带宽。
+ */
+function readMediaEnabled(): boolean {
+  return vscode.workspace.getConfiguration("axon.media").get<boolean>("enabled", false) === true;
+}
+
+/** 读取文生图开关（axon.image.enabled）。 */
+function readImageEnabled(): boolean {
+  return vscode.workspace.getConfiguration("axon.image").get<boolean>("enabled", false) === true;
+}
+
+/**
+ * 读取文生图服务配置（axon.image.*）。
+ *
+ * 与 readMediaEnabled 的区别：那边只需要一个布尔开关（组件本地下载即可）；
+ * 这边必须有可用的服务凭据。baseUrl 或 apiKey 缺失时返回 undefined ——
+ * host 侧的 checkEnv 会据此给出「去设置里配置」的引导，而不是抛一个看不懂的网络错误。
+ */
+function readImageConfig(): ImageProviderConfig | undefined {
+  const cfg = vscode.workspace.getConfiguration("axon.image");
+  const baseUrl = (cfg.get<string>("baseUrl", "") || "").trim();
+  const apiKey = (cfg.get<string>("apiKey", "") || "").trim();
+  const model = (cfg.get<string>("model", "gpt-image-1") || "").trim();
+  if (!baseUrl || !apiKey) return undefined;
+  return { baseUrl, apiKey, model: model || "gpt-image-1" };
+}
+
+/**
+ * 准备动画渲染组件：用户一旦开启开关就立即执行，不等到第一次生成时才下载。
+ *
+ * 用带进度的通知而不是静默后台下载：160MB 的下载如果没有任何反馈，
+ * 用户会以为开关坏了。失败也只提示一次，不阻塞其它功能。
+ *
+ * ⚠️ 已就绪必须直接返回，不能「走一遍进度再弹一条已就绪」。
+ * 这条曾被写成无条件执行，而它在每次启动 IDE 时都会被调用一次（见下方 readMediaEnabled 分支）；
+ * 本机早有缓存，于是每次启动都立刻命中缓存、立刻弹出同一句「动画渲染组件已就绪」。
+ * 而 VS Code 的普通通知不会自动超时消失，只能手动点 × —— 于是它就长期挂在通知中心。
+ * 结论：不是「想办法让它自动关」，而是组件已经就绪时压根不该产生任何界面反馈。
+ */
+async function prepareMediaComponents(): Promise<void> {
+  // 内置 / PATH / 缓存任一命中即已就绪：不显示进度、不提示，静默返回
+  if (await findFfmpeg()) return;
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "Axon：准备动画渲染组件",
+      cancellable: false,
+    },
+    async (progress) => {
+      try {
+        const loc = await ensureFfmpeg({
+          onProgress: ({ phase, doneBytes, totalBytes }) => {
+            if (phase === "download" && totalBytes > 0) {
+              const pct = Math.min(100, Math.floor((doneBytes / totalBytes) * 100));
+              progress.report({ message: `下载中 ${pct}%（约 ${Math.round(totalBytes / 1048576)}MB，仅需一次）` });
+            } else if (phase === "extract") {
+              progress.report({ message: "正在解压…" });
+            } else if (phase === "verify") {
+              progress.report({ message: "正在校验…" });
+            }
+          },
+        });
+        // 只有这次真的下载过才值得说一句；用状态栏消息（几秒后自动消失），不往通知中心堆东西
+        if (loc.source === "downloaded") {
+          vscode.window.setStatusBarMessage("$(check) 动画渲染组件已就绪，可以让 AI 生成 GIF / MP4 了", 5000);
+        }
+      } catch (err) {
+        // 失败要立刻让用户知道，否则能力静默不可用——这一条保留弹窗（且只在真出错时出现）
+        void vscode.window.showErrorMessage(`动画渲染组件准备失败：${(err as Error).message}`);
+      }
+    },
+  );
+}
+
+/**
+ * 一句话描述本次生成将使用哪个模型（供选择框展示）。
+ *
+ * 必须让用户在选择目标工作区时就看到它：这是本功能最贵的一次操作，
+ * 「花了大钱」这件事不该只在事后才发现。留空时如实写明是跟随会话，而不是假装已配置。
+ */
+function describeWikiModel(): string {
+  const { provider, model } = readWikiConfig();
+  if (!model) return "模型：跟随当前会话";
+  return provider ? `模型：${provider} / ${model}` : `模型：${model}`;
 }
 
 /**
@@ -90,16 +230,318 @@ async function scanChildDirsWithMarker(parentDir: string, markerFile: string): P
 }
 
 /**
+ * 归一化源目录：返回真正含标记文件的那个目录（Skill 用 SKILL.md，Power 用 POWER.md）。
+ *
+ * 常见误操作是直接选整个仓库根目录（如 lemo-opuscar），而标记文件在
+ * `plugin/skills/<name>/` 这类子目录里。此时若照抄整个仓库，复制会成功，
+ * 但扫描只认 `<根>/<目录>/<标记文件>`，列表里永远看不到它。
+ * 这里先看目录本身，再有限深度地找唯一的标记文件；找到多个说明无法确定，交回用户重选。
+ */
+async function resolveSkillSourceDir(dir: string, markerFile = "SKILL.md"): Promise<{ dir: string; note?: string } | null> {
+  const path = require("path") as typeof import("path");
+  const hasMarker = async (d: string): Promise<boolean> => {
+    try {
+      const stat = await vscode.workspace.fs.stat(vscode.Uri.file(path.join(d, markerFile)));
+      return !!(stat.type & vscode.FileType.File);
+    } catch {
+      return false;
+    }
+  };
+  if (await hasMarker(dir)) return { dir };
+
+  const found: string[] = [];
+  const walk = async (current: string, depth: number): Promise<void> => {
+    if (depth > 4 || found.length > 1) return;
+    let children: [string, vscode.FileType][];
+    try {
+      children = await vscode.workspace.fs.readDirectory(vscode.Uri.file(current));
+    } catch {
+      return;
+    }
+    for (const [name, type] of children) {
+      if (found.length > 1) return;
+      if (!(type & vscode.FileType.Directory)) continue;
+      // 跳过依赖与 VCS 目录，避免在大仓库里乱翻
+      if (name === ".git" || name === "node_modules" || name === ".axon" || name === "dist") continue;
+      const child = path.join(current, name);
+      if (await hasMarker(child)) {
+        found.push(child);
+      } else {
+        await walk(child, depth + 1);
+      }
+    }
+  };
+  await walk(dir, 0);
+  if (found.length === 1) {
+    const rel = path.relative(dir, found[0]) || "当前目录";
+    return { dir: found[0], note: `已定位到 ${rel} 下的 ${markerFile}` };
+  }
+  return null;
+}
+
+/**
+ * 本次导入产生的临时根目录：「从链接导入」下载的内容、以及 Claude 插件格式转换出来的
+ * 中间目录都在这里登记，导入流程结束后由 cleanupImportTemp 统一清理。
+ *
+ * 用数组而不是单个变量：一次导入可能同时来自链接与格式转换，覆盖会让先前的临时目录
+ * 永远清不掉。
+ */
+const pendingImportTempRoots: string[] = [];
+
+/**
+ * 清理导入留下的临时文件。
+ * 必须在复制动作完成之后调用——提前调用会把还没复制走的源文件删掉。
+ */
+async function cleanupImportTemp(): Promise<void> {
+  const roots = pendingImportTempRoots.splice(0);
+  if (roots.length === 0) return;
+  const { rm } = await import("node:fs/promises");
+  for (const root of roots) {
+    try {
+      await rm(root, { recursive: true, force: true });
+    } catch {
+      /* 清理失败不影响导入结果 */
+    }
+  }
+}
+
+// ── Claude Code Plugin → Axon Power 兼容 ─────────────────────────────────
+
+/** 一个待转换的 Claude 插件 */
+interface ClaudePluginSource {
+  name: string;
+  description?: string;
+  /** 插件根目录的绝对路径 */
+  dir: string;
+  /**
+   * 插件所在仓库的根目录（即市场目录）。
+   *
+   * 与 dir 不同时说明插件只是仓库里的一个子目录。很多插件是「薄壳」：
+   * plugin/ 里只有 SKILL.md 与 setup.sh，真正的资源（styles/、core/、tools/）在仓库根。
+   * 严格照着 source 只搬子目录，用户会看到「下载了几千个文件，导进来只有几个」。
+   */
+  rootDir?: string;
+}
+
+/** 读 JSON 文件；不存在或内容不合法都返回 null（不抛错，交回调用方降级） */
+async function readJsonFile(file: string): Promise<Record<string, unknown> | null> {
+  try {
+    const raw = await vscode.workspace.fs.readFile(vscode.Uri.file(file));
+    return JSON.parse(Buffer.from(raw).toString("utf8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/** 路径是否存在（文件或目录），不抛错 */
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await vscode.workspace.fs.stat(vscode.Uri.file(target));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 识别 Claude Code Plugin 格式，返回其中的插件目录。
+ *
+ * 兼容两种形态（对应 Claude 的两种安装方式）：
+ *  1. 市场仓库：根目录有 `.claude-plugin/marketplace.json`，其 `plugins[]` 每项带
+ *     `name` / `description` / `source`（相对仓库根的路径，如 `"./plugin"`）。
+ *     lemo-opuscar 就是这一种。
+ *  2. 插件本体：目录自身有 `.claude-plugin/plugin.json`。
+ *
+ * 只认相对路径形态的 source：`{"source":"github","repo":"..."}` 与 `git-subdir` 需要
+ * 另外联网下载，这里不猜——返回空数组让上层按「不认识」处理，好过拉错东西。
+ */
+async function resolveClaudePluginSources(rootDir: string): Promise<ClaudePluginSource[]> {
+  const path = require("path") as typeof import("path");
+
+  const marketplace = await readJsonFile(path.join(rootDir, ".claude-plugin", "marketplace.json"));
+  const entries = marketplace?.plugins;
+  if (Array.isArray(entries)) {
+    const out: ClaudePluginSource[] = [];
+    for (const raw of entries as Array<Record<string, unknown>>) {
+      const source = raw?.source;
+      if (typeof source !== "string" || !source.trim()) continue;
+      const dir = path.resolve(rootDir, source);
+      const name = typeof raw.name === "string" && raw.name ? raw.name : path.basename(dir);
+      out.push({
+        name,
+        description: typeof raw.description === "string" ? raw.description : undefined,
+        dir,
+        rootDir,
+      });
+    }
+    if (out.length > 0) return out;
+  }
+
+  const own = await readJsonFile(path.join(rootDir, ".claude-plugin", "plugin.json"));
+  if (own) {
+    return [
+      {
+        name: typeof own.name === "string" && own.name ? own.name : path.basename(rootDir),
+        description: typeof own.description === "string" ? own.description : undefined,
+        dir: rootDir,
+        rootDir,
+      },
+    ];
+  }
+
+  return [];
+}
+
+/**
+ * 由插件元信息生成 POWER.md 正文。
+ *
+ * Claude 插件没有 POWER.md（元信息在 plugin.json），而 Axon 靠 POWER.md 识别能力包，
+ * 所以转换时必须补上这一份。正文只写清来源与结构，不编造用途描述——描述优先取
+ * 插件自己声明的 description。
+ */
+function buildPowerMd(src: ClaudePluginSource): string {
+  const description = (src.description || `从 Claude Code 插件「${src.name}」导入的能力包`)
+    .replace(/\r?\n/g, " ")
+    .trim();
+  // source 是仓库子目录时，仓库根的内容也一并导入了。必须在这里写明，
+  // 否则用户打开 Power 只看到 POWER.md 与一个 skill，会以为 styles/、core/ 这些没进来。
+  const mergedRoot = src.rootDir && !isSamePath(src.rootDir, src.dir);
+  return [
+    "---",
+    `name: ${src.name}`,
+    `description: ${description}`,
+    `keywords: [${src.name}, claude-plugin]`,
+    "---",
+    "",
+    `# ${src.name}`,
+    "",
+    description,
+    "",
+    "## 来源",
+    "",
+    "本能力包由 Axon 从 Claude Code Plugin 格式自动转换而来：",
+    "",
+    "- 原插件的 `.claude-plugin/` 元信息已原样保留",
+    "- 原插件的 `skills/` 目录按 Axon Power 约定直接可用",
+    "- POWER.md 是转换时补写的（Claude 插件本身没有这个文件）",
+    ...(mergedRoot
+      ? [
+          "- **插件声明的 source 只是仓库里的一个子目录，其资源不完整；仓库根的其他内容（如 styles/、core/、tools/、docs/）已一并导入**",
+          "- 仓库根导入时跳过 `.git`（体积大且无运行价值）、`node_modules`、`.venv` 等依赖目录",
+        ]
+      : []),
+    "",
+  ].join("\n");
+}
+
+/**
+ * 把 Claude 插件目录转换成 Axon Power 目录。
+ *
+ * 做法是「复制到临时目录 + 补 POWER.md」，而不是就地改用户的源目录：转换结果随后
+ * 走与普通 Power 完全相同的重名检查与复制流程，源目录保持不被触碰；
+ * 临时目录统一登记，导入结束后自动清理。
+ */
+async function convertClaudePlugins(srcs: ClaudePluginSource[]): Promise<string[]> {
+  const path = require("path") as typeof import("path");
+  const { mkdtemp } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "axon-claude-plugin-"));
+  pendingImportTempRoots.push(tempRoot);
+
+  const out: string[] = [];
+  for (const src of srcs) {
+    const target = path.join(tempRoot, src.name);
+    await vscode.workspace.fs.copy(vscode.Uri.file(src.dir), vscode.Uri.file(target), { overwrite: true });
+
+    // ⚠️ 只搬 source 指向的子目录是不够的。
+    //
+    // lemo-opuscar 的 marketplace.json 写的是 `"source": "./plugin"`，而 plugin/ 里只有
+    // plugin.json + SKILL.md + setup.sh 三个文件；真正的 styles/（1983 个）、core/（46 个）、
+    // tools/（12 个）、docs/（69 个）全在仓库根。用户下载了两千多个文件、导入后只看到 4 个，
+    // 就是因为这里严格照着 source 搬。
+    //
+    // 所以 source 只是仓库子目录时，把仓库根的内容也并进来（子目录优先，不覆盖）。
+    // 跳过 .git（本仓库占 142MB）、依赖目录与已搬过的 plugin/。
+    if (src.rootDir && !isSamePath(src.rootDir, src.dir)) {
+      const SKIP = new Set([".git", "node_modules", ".venv", "plugin", ".claude-plugin", ".github", "dist", ".axon"]);
+      let entries: [string, vscode.FileType][] = [];
+      try {
+        entries = await vscode.workspace.fs.readDirectory(vscode.Uri.file(src.rootDir));
+      } catch {
+        entries = [];
+      }
+      for (const [name] of entries) {
+        if (SKIP.has(name)) continue;
+        const from = path.join(src.rootDir, name);
+        const to = path.join(target, name);
+        // plugin/ 里已经搬过来的内容优先，不覆盖
+        if (await pathExists(to)) continue;
+        try {
+          await vscode.workspace.fs.copy(vscode.Uri.file(from), vscode.Uri.file(to), { overwrite: false });
+        } catch {
+          /* 单个条目失败不影响整体导入 */
+        }
+      }
+    }
+
+    const powerMd = path.join(target, "POWER.md");
+    let hasPowerMd = true;
+    try {
+      await vscode.workspace.fs.stat(vscode.Uri.file(powerMd));
+    } catch {
+      hasPowerMd = false;
+    }
+    if (!hasPowerMd) {
+      await vscode.workspace.fs.writeFile(vscode.Uri.file(powerMd), new TextEncoder().encode(buildPowerMd(src)));
+    }
+    out.push(target);
+  }
+  return out;
+}
+
+/**
  * 让用户批量选择要导入的源目录，返回选中目录的绝对路径列表（取消返回 undefined）。
- * 提供两种方式：
+ * 提供三种方式：
  *  1. 浏览目录（文件对话框中可按住 Ctrl 多选文件夹）
  *  2. 从父目录勾选（选一个父目录，列出其下所有含标记文件的子目录，逐个勾选）
+ *  3. 从链接导入（粘贴 GitHub 仓库/目录地址，只抓取目标子目录）
  */
 async function pickImportSourceDirs(label: string, markerFile: string): Promise<string[] | undefined> {
   const modeBrowse = "浏览并选择目录（可按住 Ctrl 多选）";
   const modeParent = "从父目录勾选（列出后逐个勾选，推荐）";
-  const mode = await vscode.window.showQuickPick([modeBrowse, modeParent], { placeHolder: `${label} 导入方式` });
+  const modeUrl = "从链接导入（粘贴 GitHub 地址）";
+  const mode = await vscode.window.showQuickPick([modeBrowse, modeParent, modeUrl], { placeHolder: `${label} 导入方式` });
   if (!mode) return undefined;
+
+  if (mode === modeUrl) {
+    const raw = await vscode.window.showInputBox({
+      title: `从链接导入 ${label}`,
+      prompt: `粘贴 GitHub 仓库或目录链接，目标目录里应含 ${markerFile}`,
+      placeHolder: "https://github.com/owner/repo/tree/main/path/to/skill",
+      ignoreFocusOut: true,
+      validateInput: (value) => (value.trim() && !parseGitHubUrl(value) ? "请填写 GitHub 仓库或目录链接" : undefined),
+    });
+    if (!raw) return undefined;
+
+    const target = parseGitHubUrl(raw);
+    if (!target) {
+      vscode.window.showErrorMessage("无法识别该链接，请使用 GitHub 仓库或目录地址。");
+      return undefined;
+    }
+
+    try {
+      const downloaded = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `从链接导入 ${label}`, cancellable: false },
+        (progress) => downloadGitHubDir(target, (message) => progress.report({ message })),
+      );
+      pendingImportTempRoots.push(downloaded.tempRoot);
+      return [downloaded.dir];
+    } catch (err) {
+      vscode.window.showErrorMessage(`从链接导入失败：${(err as Error).message}`);
+      return undefined;
+    }
+  }
 
   if (mode === modeBrowse) {
     const uris = await vscode.window.showOpenDialog({
@@ -272,6 +714,18 @@ export function activate(context: vscode.ExtensionContext): void {
   const { providerCount, sources } = loadProviderEnv();
   console.log(`[axon] provider 配置加载：识别到 ${providerCount} 个 provider，来源 [${sources.join(", ") || "无"}]`);
 
+  // 内置 Power 根目录：随扩展分发的只读目录（media/powers，构建时从源码拷入）。
+  // 只在这里注入一次，core 用模块级存储接住（与 Provider 的启动期注入同一套路）。
+  // 内置 Power 的启用状态不写这个目录——它只读、且升级覆盖后会丢；启用状态写用户级配置。
+  setBuiltinPowersDir(vscode.Uri.joinPath(context.extensionUri, "media", "powers").fsPath);
+
+  // 渲染器可用的内置前端库目录：页面里 /vendor/<文件名> 会被映射到这里。
+  // 目前只放 Three.js（真三维场景），与内置 Power 同属随扩展分发的只读资源。
+  setMediaVendorDir(vscode.Uri.joinPath(context.extensionUri, "media", "vendor").fsPath);
+
+  // 生图服务配置：激活时读一次，配置变更时再刷新（见下面的 onDidChangeConfiguration）
+  setImageProviderConfig(readImageConfig());
+
   const storage = new JsonFileStorage();
   const channel = new VSCodeChannel();
 
@@ -280,13 +734,212 @@ export function activate(context: vscode.ExtensionContext): void {
   // 所有工作区文件夹（多根工作区场景）
   const allWorkspaces = vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) || [defaultWorkspace];
 
-  /** 列出全局 relay（relay 统一落盘到 <homeDir>/.axon/relays/，不跟工作区绑定） */
-  async function listAllRelays(): Promise<Array<{ id: string; title: string; phase: string }>> {
+  /**
+   * 列出所有 relay。
+   *
+   * Agent 创建 relay 时写入的是【会话工作区】的 .axon/relays/（见 AgentSession.relayStore），
+   * 而会话工作区可以是 Axon 里另选的文件夹（不开文件夹启动 VS Code、或在面板里换了工作区），
+   * 不一定是 VS Code 打开的那个。早先只扫 VS Code 文件夹 + 主目录，这种会话建的 relay
+   * 在侧边栏里永远看不到。现在的根：
+   *   · VS Code 当前打开的文件夹（现取，不用激活时的快照——中途增删文件夹也跟得上）
+   *   · 活跃会话 / 面板选好的工作区（hub.getKnownWorkspaces）
+   *   · 历史会话落盘的工作区（重启后活跃会话没了，靠它找回）
+   *   · 主目录（历史遗留产物）
+   */
+  async function listAllRelays(): Promise<Array<{ id: string; title: string; phase: string; root?: string }>> {
     const { RelayStore } = await import("@axon/core");
     const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-    const store = new RelayStore(homedir(), createHost());
+    const sessionWorkspaces = await storage.listSessions()
+      .then((list) => list.map((s) => s.workspace))
+      .catch(() => [] as string[]);
+    const roots = [
+      ...(vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) ?? allWorkspaces),
+      ...hub.getKnownWorkspaces(),
+      ...sessionWorkspaces,
+      homedir(),
+    ].filter(Boolean);
+    const store = new RelayStore(roots, createHost());
     const relays = await store.list();
-    return relays.map((r) => ({ id: r.id, title: r.title, phase: r.phase }));
+    return relays.map((r) => ({ id: r.id, title: r.title, phase: r.phase, root: r.root }));
+  }
+
+  /**
+   * 刷新 Wiki 侧边栏：读页面列表 + 陈旧状态，并把「待复核页数」挂到视图徽标上。
+   *
+   * 徽标是这套设计的关键一环——页面一多，人不会主动翻列表去找 ⚠️；
+   * 「有 N 页可能过时」必须有个常驻可见的位置提示，才有动力去刷新。
+   *
+   * 整个流程不调用 LLM（只读文件 + 比对 mtime），所以可以随便触发：启动时、文件变动时、
+   * 手动刷新时都走它。真正花钱的是「重新生成页面」，那一步必须用户显式触发。
+   *
+   * 根取全部工作区：wiki 是 per-repo 的，多根场景下各自都可能有。
+   */
+  /** 选择框项：携带工作区绝对路径，选中后直接可用 */
+  interface WikiTargetPick extends vscode.QuickPickItem {
+    ws: string;
+  }
+
+  /**
+   * 让用户显式选择「生成 Wiki 的目标工作区」。
+   *
+   * ── 为什么必须让用户选，而不是自动推定 ──
+   * 早先按「活动编辑器所属工作区 → 主工作区」自动推定，实测立刻出问题：用户点了生成，
+   * 提示「将生成到 d:\me\work-prds」—— 而他从未选择过这个工作区，只因恰好有个文件
+   * 开在编辑器里。推定把「碰巧在看什么」当成了「想做什么」。
+   *
+   * 写操作的代价不可逆：往不相干的仓库写进一堆文件，而且它们会被提交。必须让用户拍板。
+   * 这与 promptBuilder 里的【工作区聚焦】是两回事 —— 那个是软提示，用于搜索/读取这类
+   * 可逆操作，猜错只是多翻几个文件；读可以猜，写不能猜。
+   *
+   * 单工作区时跳过选择：没有第二种可能，弹一个只有一个选项的框只是徒增点击。
+   */
+  async function pickWikiTargetWorkspace(): Promise<string | undefined> {
+    if (allWorkspaces.length === 1) return allWorkspaces[0];
+
+    const { WikiStore } = await import("@axon/core");
+    const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+    const store = new WikiStore(allWorkspaces, createHost());
+
+    // 带上「已有多少页 / 是否有未完成作业」：选工作区时这正是判断依据，用户不必先去列表里翻。
+    // 探测失败不阻塞选择本身 —— 选择框的价值在于让用户拍板，不在于这些附加信息。
+    const pages = await store.summary().catch((err: unknown) => {
+      // 不阻塞选择，但要留下线索：页数显示成「尚未生成」可能只是读取失败
+      console.warn("[wiki] 读取已有页面失败：", (err as Error)?.message);
+      return [];
+    });
+    const countByWs = new Map<string, number>();
+    for (const p of pages) countByWs.set(p.workspace, (countByWs.get(p.workspace) ?? 0) + 1);
+
+    const items: WikiTargetPick[] = [];
+    for (const ws of allWorkspaces) {
+      const count = countByWs.get(ws) ?? 0;
+      let resume = false;
+      try {
+        resume = (await store.getResumableJob(ws)) !== null;
+      } catch { /* 单根探测失败不该阻塞整体选择 */ }
+      const bits = [count > 0 ? `已有 ${count} 页` : "尚未生成"];
+      if (resume) bits.push("有未完成的生成，选中即续跑");
+      items.push({ label: basename(ws), description: ws, detail: bits.join(" ｜ "), ws });
+    }
+
+    const picked = await vscode.window.showQuickPick(items, {
+      // 模型信息放标题而非每一行的 detail：17 个工作区重复同一句毫无意义，
+      // 但它又必须显眼 —— 这是本功能最贵的一次操作，用户点确定前要知道用哪个模型。
+      title: `选择生成 Wiki 的工作区  ｜  ${describeWikiModel()}`,
+      placeHolder: "Wiki 是仓库级资产，一次只针对一个工作区生成",
+      ignoreFocusOut: true,
+    });
+    return picked?.ws;
+  }
+
+  // ── Wiki 生成期的共享状态 ──────────────────────────────────────────────
+  // 声明在两处使用点（生成命令、wiki_generation 事件处理）之前，
+  // 避免出现「用了后面才声明的变量」这种要往前翻才读得懂的顺序。
+
+  /**
+   * Wiki 生成的进度落点 —— 自建的状态栏项：生成期间显示当前阶段，点击即取消。
+   *
+   * ── 为什么不用 withProgress 的进度通知 ──
+   * VS Code 的进度通知不渲染关闭按钮（notificationsViewer 里只有非进度通知才加 close 动作），
+   * 于是它一旦出现就一直在屏幕上，长任务期间用户唯一能让它消失的办法是点「取消」——
+   * 而那会把整个生成停掉。等于逼人在「忍受遮挡」和「中止任务」之间二选一。
+   *
+   * ── 为什么也不走 ProgressLocation.Window ──
+   * 公开 API 的 ProgressOptions 不含 command 字段（只有 workbench 内部的
+   * IProgressWindowOptions 才有），扩展侧传不进去，于是它只会退化成一条静默通知，
+   * 进度依旧藏着。自建状态栏项则 text 与 command 都能控制。
+   */
+  const wikiStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
+  wikiStatusItem.command = "axon.wiki.cancel";
+  wikiStatusItem.tooltip = "点击取消本次 Wiki 生成";
+  context.subscriptions.push(wikiStatusItem);
+
+  /** 本次生成的目标工作区目录名（状态栏与面板提示都靠它标注归属） */
+  let wikiTargetName = "";
+
+  /**
+   * 给结果通知补上「是哪个应用」。
+   *
+   * 长任务结束时用户多半已经切走、没盯着看，「生成完成，共 14 页」缺了主语就无从判断
+   * 是哪个仓库的 —— 而这个面板管着所有工作区。过程期间不再需要它：那些进度已经直接
+   * 挂在对应的应用节点上了（见 WikiTreeProvider.setGenerating）。
+   */
+  const wikiMsg = (text: string): string => (wikiTargetName ? `${wikiTargetName}：${text}` : text);
+
+  /** 更新状态栏上的生成进度（固定带 spinner，一眼看出还在跑） */
+  const setWikiProgress = (message: string): void => {
+    const who = wikiTargetName ? `${wikiTargetName}：` : "";
+    wikiStatusItem.text = `$(loading~spin) 生成 Wiki：${who}${message}`;
+  };
+
+  /**
+   * 生成中标志，挡住重复点击。
+   *
+   * 根因层的守卫在 core（AgentSession.generateWiki）—— 那里才真正防住「两个并发生成互相破坏」。
+   * 这里再挡一层是为了立刻给出可见提示：否则用户只会看到一个通知闪一下又消失，不知道发生了什么。
+   */
+  let wikiGenerating = false;
+
+  /** 各页面依据文件的绝对路径（规整后的键），由 refreshWikiTree 维护 */
+  let wikiSourcePaths = new Set<string>();
+  // 依据文件监听器的状态（见 rewatchWikiSources）。声明在 refreshWikiTree 之前：它可能在激活早期就被调用
+  let wikiSourceWatchers: vscode.Disposable[] = [];
+  let wikiWatchKey = "";
+  let wikiSourceTimer: ReturnType<typeof setTimeout> | undefined;
+  const normPathKey = (p: string): string => p.replace(/\\/g, "/").toLowerCase();
+
+  async function refreshWikiTree(): Promise<number> {
+    const { WikiStore } = await import("@axon/core");
+    const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+    const store = new WikiStore(allWorkspaces, createHost());
+    const pages = await store.summary();
+    // 记下所有页面的依据文件：它们一改，侧边栏的「待复核」就要跟着变（见下方 wikiSourceWatcher）
+    wikiSourcePaths = new Set(pages.flatMap((p: { workspace: string; sources: string[] }) => p.sources.map((src: string) => normPathKey(join(p.workspace, src)))));
+    rewatchWikiSources(pages);
+    const staleCount = wikiTree.refresh(pages);
+    wikiView.badge = staleCount > 0
+      ? { value: staleCount, tooltip: `${staleCount} 个 Wiki 页面可能已过时` }
+      : undefined;
+    // 这里不再显示项目名：应用已经是树的最上层分组（见 treeViews 的 buildWikiTree），
+    // 标题旁再写一遍只是重复。
+    // 顺带刷新控制台的入口描述与任务列表：页数会变、作业状态会变（生成完 / 中断 / 失败）。
+    // 两处数据同源（同一份 .state.json），分开取会读到不同快照，出现「入口说 13 页、
+    // 列表里 14 个文件」这种对不上的情况。
+    const jobs = await store.listJobs().catch(() => []);
+    wikiTasksTree.refresh(jobs);
+    return staleCount;
+  }
+
+  /**
+   * 跑一次 Wiki 生成（整体 / 只刷新待复核 / 只重写某页），统一处理防重入、状态栏进度与收尾。
+   */
+  async function runWikiGeneration(target: string, scope: { mode: "full" | "stale" | "pages"; slugs?: string[] }, firstStatus: string): Promise<void> {
+    // 挡重复点击：并发生成会互相破坏。根因层的守卫在 core（AgentSession.generateWiki），
+    // 这里再挡一层是为了立刻给出可见提示 —— 否则用户只会看到一个通知闪一下又消失。
+    if (wikiGenerating) {
+      void vscode.window.showInformationMessage("已有 Wiki 生成在进行中，请等它结束或先取消。");
+      return;
+    }
+    wikiGenerating = true;
+    const { provider, model, maxPages, tokenBudget } = readWikiConfig();
+    // 进度放在【状态栏】而不是弹窗通知里：进度通知没有关闭按钮（见 wikiStatusItem 的说明）。
+    // 取消有两个入口：① 点状态栏那条进度 ② Wiki 面板标题栏的「取消」（仅生成期间出现）
+    wikiTargetName = basename(target);
+    setWikiProgress(firstStatus);
+    wikiStatusItem.show();
+    void vscode.commands.executeCommand("setContext", "axon.wikiGenerating", true);
+    try {
+      await hub.dispatch({ type: "wiki_generate", workspace: target, provider, model, maxPages, tokenBudget, mode: scope.mode, slugs: scope.slugs } as any);
+    } catch (err) {
+      vscode.window.showErrorMessage(`生成 Wiki 失败：${(err as Error).message}`);
+    } finally {
+      // 无论成功/失败/取消都要收干净：残留的状态栏项和 spinner 看上去像卡死了
+      wikiTree.setGenerating(null);
+      wikiStatusItem.hide();
+      wikiTargetName = "";
+      wikiGenerating = false;
+      void vscode.commands.executeCommand("setContext", "axon.wikiGenerating", false);
+    }
   }
 
   const isValidDir = async (p: string): Promise<boolean> => {
@@ -298,6 +951,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
+  // MCP 连接（stdio 子进程 / 远程会话）在扩展停用时要关掉，否则子进程会比窗口活得久
+  const mcpCapability = createNodeMcpCapability();
+  disposeOnDeactivate = async () => {
+    await Promise.allSettled([mcpCapability.dispose(), closeAllBrowsers()]);
+  };
   const hub = new SessionHub({
     storage,
     channel,
@@ -308,28 +966,42 @@ export function activate(context: vscode.ExtensionContext): void {
     workspaces: allWorkspaces,
     homeDir: homedir(),
     web: { search: webSearch, fetch: webFetch },
-    mcp: createNodeMcpCapability(),
+    mcp: mcpCapability,
     // 命令信任白名单：读写 `axon.trustedCommands` 配置（弹窗授权与设置管理共用同一份数据）
     commandTrust: new VSCodeCommandTrustStore(),
     // 滚动压缩配置：读取 VS Code 设置（axon.compaction.*），默认关闭
     getCompactionConfig: () => readCompactionConfig(),
     // Credits 预算门配置：读取 VS Code 设置（axon.creditBudget.*），默认启用
     getCreditBudgetConfig: () => readCreditBudgetConfig(),
+    // trace 记录配置：读取 VS Code 设置（axon.trace.*），默认 normal
+    getTraceConfig: () => readTraceConfig(),
+    // 动画 / 视频生成开关：读取 VS Code 设置（axon.media.enabled），默认关闭
+    getMediaEnabled: () => readMediaEnabled(),
+    // 文生图开关：读取 VS Code 设置（axon.image.enabled），默认关闭
+    getImageEnabled: () => readImageEnabled(),
+    // Wiki 目录字数上限：读取 VS Code 设置（axon.wiki.indexMaxChars）
+    getWikiIndexMaxChars: () => vscode.workspace.getConfiguration("axon.wiki").get<number>("indexMaxChars", 1200),
   });
 
   // REST 请求路由（webview 形态下替代 Express）
   const router = new RequestRouter({
     storage,
+    secrets: context.secrets,
     isValidDir,
     browse: vscodeBrowse,
     defaultWorkspace,
   });
 
+  let usageStatusBar: ReturnType<typeof registerAxonUsageStatusBar> | undefined;
   const provider = new AxonViewProvider(
     context,
     channel,
     async (cmd: ControlCommand) => {
       try {
+        if (cmd.type === "set_active_provider") {
+          await usageStatusBar?.setActiveProvider(cmd.provider);
+          return;
+        }
         await hub.dispatch(cmd);
       } catch (err) {
         const error = err as Error;
@@ -375,8 +1047,24 @@ export function activate(context: vscode.ExtensionContext): void {
       if (e.affectsConfiguration("axon.creditBudget")) {
         hub.reloadCreditBudgetConfig();
       }
+      if (e.affectsConfiguration("axon.trace")) {
+        hub.reloadTraceConfig();
+      }
+      if (e.affectsConfiguration("axon.media.enabled")) {
+        hub.reloadMediaEnabled();
+        // 用户刚打开开关：立刻开始准备组件，不要等到第一次生成时才发现要下载 160MB
+        if (readMediaEnabled()) void prepareMediaComponents();
+      }
+      if (e.affectsConfiguration("axon.image")) {
+        // 配置项变了要重新读一遍：改 baseUrl / apiKey / model 后不必重启 IDE
+        setImageProviderConfig(readImageConfig());
+        hub.reloadImageEnabled();
+      }
     })
   );
+
+  // 动画能力已在设置里开启时，启动即后台准备组件（已缓存则瞬间返回，不联网）
+  if (readMediaEnabled()) void prepareMediaComponents();
 
   // ── 编辑器选区一键操作 helper ───────────────────────────────────────────
   const quickAction = async (
@@ -424,6 +1112,43 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("axon.newSession", () => provider.postToWebview({ type: "command:new_session" })),
+    vscode.commands.registerCommand("axon.chatMode", () => provider.postToWebview({ type: "set_mode", mode: "quest" })),
+    vscode.commands.registerCommand("axon.codeMode", () => provider.postToWebview({ type: "set_mode", mode: "agent" })),
+    vscode.commands.registerCommand("axon.coworkMode", () => provider.postToWebview({ type: "set_mode", mode: "cowork" })),
+    // 连接器面板挂在聊天侧栏的 webview 里（它持有 Agent 通道）：先把侧栏亮出来再通知它打开
+    vscode.commands.registerCommand("axon.connectors", async () => {
+      await vscode.commands.executeCommand("axon.chat.focus");
+      provider.postToWebview({ type: "open_connectors" });
+    }),
+    // 打开诊断输出面板：界面卡灰后可在此查看记录（含卡死时刻与当时的操作）
+    vscode.commands.registerCommand("axon.showDiagnostics", () => showDiagLog()),
+    // 预览浮层的「在编辑器中打开」：overlay 在 workbench 侧，不直接碰文件系统，
+    // 回调到这里用扩展已有的打开逻辑（路径解析 / 二进制判定都在扩展这边）
+    vscode.commands.registerCommand("axon.openFileFromPreview", async (filePath?: string) => {
+      if (!filePath) return;
+      try {
+        await vscode.window.showTextDocument(vscode.Uri.file(filePath), { preview: true });
+      } catch {
+        // 二进制等无法以文本打开的文件：交给系统默认程序
+        await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(filePath));
+      }
+    }),
+    // 预览浮层的「在文件系统中打开」：revealFileInOS 是 VS Code 内置命令，
+    // 会在系统文件管理器里定位并选中该文件。个别环境没有注册它时退化为打开所在文件夹。
+    vscode.commands.registerCommand("axon.revealFileInOs", async (filePath?: string) => {
+      if (!filePath) return;
+      try {
+        await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(filePath));
+      } catch {
+        await vscode.env.openExternal(vscode.Uri.file(dirname(filePath)));
+      }
+    }),
+    // Cowork 改动对比浮层的「恢复原稿」：overlay 在 workbench 侧不碰文件系统，
+    // 回到这里用快照覆盖现文件（viewProvider 内部会再开预览确认 + 通知 webview）
+    vscode.commands.registerCommand("axon.restoreCoworkSnapshot", async (filePath?: string, snapshotDir?: string) => {
+      if (!filePath || !snapshotDir) return;
+      await provider.restoreCoworkSnapshotFromOverlay(filePath, snapshotDir);
+    }),
     vscode.commands.registerCommand("axon.focusChat", () => {
       // 先确保辅助侧栏可见，再聚焦 Axon chat view
       vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");
@@ -492,9 +1217,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("axon.quickRefactor", async (payload?: { text?: string; fileName?: string; startLine?: number; startColumn?: number; endLine?: number; endColumn?: number }) => {
       await quickAction("refactor", payload, provider);
     }),
-    vscode.commands.registerCommand("axon.openRelay", (relayId: string) => {
-      // 点击 Relay 树节点：在编辑器 Tab 打开 Relay 详情面板
-      const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "";
+    vscode.commands.registerCommand("axon.openRelay", (relayId: string, root?: string) => {
+      // 点击 Relay 树节点：在编辑器 Tab 打开 Relay 详情面板。
+      // 优先用树节点带来的所在根（Relay 可能在 Axon 另选的工作区里），没有才退回 VS Code 首个文件夹
+      const workspace = root || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "";
       openOrFocusPanel({
         id: `relay-${relayId}`,
         title: `Relay: ${relayId}`,
@@ -507,6 +1233,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("axon.deleteRelay", async (item: vscode.TreeItem) => {
       // 右键删除 Relay
       const relayId = item.command?.arguments?.[0] as string | undefined;
+      const relayRoot = item.command?.arguments?.[1] as string | undefined;
       if (!relayId) return;
       const confirm = await vscode.window.showWarningMessage(
         `确定删除 Relay「${item.label}」？正在执行的任务会被中断，文档与进度将一并移除。此操作不可撤销。`,
@@ -516,7 +1243,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (confirm !== "删除") return;
       try {
         // 通过 SessionHub dispatch 走 session 层删除：会取消正在运行的子 Agent，让 AI 感知
-        await hub.dispatch({ type: "delete_relay", relayId, workspace: defaultWorkspace } as any);
+        await hub.dispatch({ type: "delete_relay", relayId, workspace: relayRoot || defaultWorkspace } as any);
         // 刷新树（relay_deleted 事件也会触发刷新，这里兜底）
         const relays = await listAllRelays();
         relayTree.refresh(relays);
@@ -529,6 +1256,212 @@ export function activate(context: vscode.ExtensionContext): void {
         const relays = await listAllRelays();
         relayTree.refresh(relays);
       } catch { /* ignore */ }
+    }),
+    vscode.commands.registerCommand("axon.wiki.generate", async () => {
+      // 目标工作区由用户显式选择，不做任何推定（推定会把「碰巧在看什么」当成「想做什么」）。
+      const target = await pickWikiTargetWorkspace();
+      if (!target) return; // 用户取消
+      await runWikiGeneration(target, { mode: "full" }, "正在勘察仓库、规划页面…");
+    }),
+    vscode.commands.registerCommand("axon.wiki.refreshStale", async (item?: vscode.TreeItem) => {
+      // 只重写「待复核」的页面，不重新规划：代码改了一些之后刷新用，比整体重新生成便宜得多
+      const ws = (item as unknown as { wikiWorkspace?: string } | undefined)?.wikiWorkspace ?? await pickWikiTargetWorkspace();
+      if (!ws) return;
+      await runWikiGeneration(ws, { mode: "stale" }, "正在重写待复核的页面…");
+    }),
+    vscode.commands.registerCommand("axon.wiki.regeneratePage", async (item?: vscode.TreeItem) => {
+      const target = item as unknown as { wikiSlug?: string; wikiWorkspace?: string } | undefined;
+      if (!target?.wikiSlug || !target.wikiWorkspace) return;
+      await runWikiGeneration(target.wikiWorkspace, { mode: "pages", slugs: [target.wikiSlug] }, "正在重新生成页面…");
+    }),
+    vscode.commands.registerCommand("axon.wiki.markReviewed", async (item?: vscode.TreeItem) => {
+      // 看过后认为内容仍然准确（只是格式化、改了无关代码）：重新记录时间戳，不花钱重新生成
+      const target = item as unknown as { wikiSlug?: string; wikiWorkspace?: string } | undefined;
+      if (!target?.wikiSlug || !target.wikiWorkspace) return;
+      try {
+        const { WikiStore } = await import("@axon/core");
+        const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+        const store = new WikiStore(allWorkspaces, createHost());
+        if (!(await store.markReviewed(target.wikiSlug, target.wikiWorkspace))) {
+          vscode.window.showWarningMessage("未找到该页面，可能已被删除。");
+        }
+        await refreshWikiTree().catch(() => { /* 刷新失败不影响结果 */ });
+      } catch (err) {
+        vscode.window.showErrorMessage(`标记失败：${(err as Error).message}`);
+      }
+    }),
+    vscode.commands.registerCommand("axon.wiki.cancel", async () => {
+      // 只取消 Wiki 生成（专用信号），不碰聊天：驱动层在每页之间检查，作业记为 interrupted（可续跑）。
+      // 已生成的页面全部保留，下次点击接着写剩下的，不必从头再来。
+      if (!wikiGenerating) {
+        void vscode.window.showInformationMessage("当前没有正在进行的 Wiki 生成。");
+        return;
+      }
+      await hub.dispatch({ type: "wiki_cancel" } as any);
+    }),
+    vscode.commands.registerCommand("axon.wiki.pickModel", async () => {
+      // 选 provider + 模型，写入设置（用户级）。
+      // 单独做成命令、而不是每次生成前都问一遍：模型是低频且稳定的偏好，
+      // 不该在每次生成时都打断用户一次。
+      const { getResolvedProviders } = await import("@axon/core");
+      const cur = readWikiConfig();
+
+      /** 选择项携带 provider/model，选中后直接写设置 */
+      type ModelPick = vscode.QuickPickItem & { provider?: string; model?: string };
+      const items: ModelPick[] = [
+        {
+          label: "$(sync) 跟随当前会话模型",
+          description: cur.model ? "" : "（当前）",
+          detail: "Wiki 跑得少但要读懂代码，沿用你在对话里已选定的模型最稳妥。",
+          provider: "",
+          model: "",
+        },
+      ];
+      for (const p of getResolvedProviders()) {
+        if (!p.configured) continue; // 没配 key 的 provider 列出来只会让人白点一次
+        for (const m of p.models) {
+          if (m.disabled) continue;
+          const isCur = cur.provider === p.name && cur.model === m.id;
+          items.push({
+            label: m.id,
+            description: `${p.label || p.name}${isCur ? "  ← 当前" : ""}`,
+            provider: p.name,
+            model: m.id,
+          });
+        }
+      }
+
+      const picked = await vscode.window.showQuickPick(items, {
+        title: "选择生成 Wiki 使用的模型",
+        placeHolder: "只影响 Wiki 生成，不影响对话",
+        ignoreFocusOut: true,
+      });
+      if (!picked) return;
+
+      // 写用户级：这是机器本地偏好，不该跟着某个项目走
+      const cfg = vscode.workspace.getConfiguration("axon.wiki");
+      await cfg.update("provider", picked.provider ?? "", vscode.ConfigurationTarget.Global);
+      await cfg.update("model", picked.model ?? "", vscode.ConfigurationTarget.Global);
+      void vscode.window.showInformationMessage(
+        picked.model ? `Wiki 生成将使用 ${picked.provider} / ${picked.model}` : "Wiki 生成将跟随当前会话模型",
+      );
+    }),
+    vscode.commands.registerCommand("axon.wiki.showResults", async () => {
+      // 跳转到「生成结果」视图。优先聚焦该视图本体；个别版本不认 <viewId>.focus 时
+      // 退回聚焦整个 Wiki 容器 —— 两条路都能让用户看到结果，比只留一条然后静默失败好。
+      try {
+        await vscode.commands.executeCommand("axon.wiki.pages.focus");
+      } catch {
+        await vscode.commands.executeCommand("workbench.view.extension.axon-wiki");
+      }
+      // 顺便刷新：用户点进来通常是想看最新的，而不是上次渲染时的快照
+      await refreshWikiTree().catch(() => { /* 刷新失败不影响跳转本身 */ });
+    }),
+    vscode.commands.registerCommand("axon.wiki.deletePage", async (item?: vscode.TreeItem) => {
+      const target = item as unknown as { wikiSlug?: string; wikiWorkspace?: string } | undefined;
+      const slug = target?.wikiSlug;
+      if (!slug) return;
+      const label = typeof item?.label === "string" ? item.label : slug;
+      // 明确写出「会删文件」以及「可从 git 恢复」：前者防止误以为只从列表移除，
+      // 后者给出退路，免得用户以为一删就没救了而不敢动手。
+      const confirm = await vscode.window.showWarningMessage(
+        `确定删除 Wiki 页面「${label}」？\n\n` +
+        `会从 ${basename(target?.wikiWorkspace || "")}/.axon/wiki/ 中移除该文件。\n` +
+        `若该文件已提交到 git，可以从中恢复。`,
+        { modal: true },
+        "删除",
+      );
+      if (confirm !== "删除") return;
+      try {
+        const { WikiStore } = await import("@axon/core");
+        const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+        const store = new WikiStore(allWorkspaces, createHost());
+        // 带上工作区：多个项目可以有同名页面，删错项目的文件是不可接受的
+        if (await store.remove(slug, target?.wikiWorkspace)) {
+          vscode.window.showInformationMessage(`已删除页面「${label}」`);
+        } else {
+          vscode.window.showWarningMessage(`未找到页面「${label}」，可能已被删除。`);
+        }
+        await refreshWikiTree().catch(() => { /* 树刷新失败不影响删除结果 */ });
+      } catch (err) {
+        vscode.window.showErrorMessage(`删除页面失败：${(err as Error).message}`);
+      }
+    }),
+    vscode.commands.registerCommand("axon.wiki.deleteJob", async (item?: vscode.TreeItem) => {
+      const jobId = (item as unknown as { wikiJobId?: string } | undefined)?.wikiJobId;
+      if (!jobId) return;
+      // 两个后果都必须先说清：① 不动页面（免得用户以为会连页面一起删）；
+      // ② 中断的作业删掉就不能续跑了（那正是它存在的意义），这是真正不可逆的部分。
+      const confirm = await vscode.window.showWarningMessage(
+        `确定删除这条生成记录？（${jobId}）\n\n` +
+        `只删记录，不会删除已生成的页面。\n` +
+        `若这条是「已中断」的作业，删除后就不能再续跑了。`,
+        { modal: true },
+        "删除",
+      );
+      if (confirm !== "删除") return;
+      try {
+        const { WikiStore } = await import("@axon/core");
+        const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+        const store = new WikiStore(allWorkspaces, createHost());
+        if (await store.removeJob(jobId)) {
+          vscode.window.showInformationMessage("已删除该记录");
+        } else {
+          vscode.window.showWarningMessage("未找到该记录，可能已被清理。");
+        }
+        await refreshWikiTree().catch(() => { /* 树刷新失败不影响删除结果 */ });
+      } catch (err) {
+        vscode.window.showErrorMessage(`删除记录失败：${(err as Error).message}`);
+      }
+    }),
+    vscode.commands.registerCommand("axon.wiki.deleteWorkspace", async (item?: vscode.TreeItem) => {
+      const ws = (item as unknown as { wikiWorkspace?: string } | undefined)?.wikiWorkspace;
+      if (!ws) return;
+      const name = basename(ws);
+      try {
+        const { WikiStore } = await import("@axon/core");
+        const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+        const store = new WikiStore(allWorkspaces, createHost());
+        // 先数清页数再确认：用户得知道这一下删掉的是多大一块，
+        // 只说「确定删除吗」等于让人蒙着眼睛按按钮
+        const pages = (await store.summary()).filter((p) => p.workspace === ws);
+        if (pages.length === 0) {
+          void vscode.window.showInformationMessage(`「${name}」下没有 Wiki 页面。`);
+          return;
+        }
+        // 这是破坏面最大的一个删除（一次清掉整个应用的 Wiki），所以确认框给全三件事：
+        // 删几个、删在哪里、还能不能救回来。第三条尤其不能省 ——
+        // 没有退路时人会不敢动手，有退路（git）时才敢正常使用这个功能。
+        const confirm = await vscode.window.showWarningMessage(
+          `确定删除应用「${name}」的全部 ${pages.length} 个 Wiki 页面？\n\n` +
+          `会移除 ${name}/.axon/wiki/ 下的 ${pages.length} 个文件，并清除该应用的生成记录（含可续跑状态）。\n` +
+          `此操作在 Axon 内无法撤销；若这些文件已提交到 git，可以从 git 恢复。`,
+          { modal: true },
+          "删除",
+        );
+        if (confirm !== "删除") return;
+        const removed = await store.removeWorkspace(ws);
+        vscode.window.showInformationMessage(`已删除「${name}」的 ${removed} 个 Wiki 页面`);
+        await refreshWikiTree().catch(() => { /* 树刷新失败不影响删除结果 */ });
+      } catch (err) {
+        vscode.window.showErrorMessage(`删除失败：${(err as Error).message}`);
+      }
+    }),
+    vscode.commands.registerCommand("axon.wiki.refresh", async () => {
+      try {
+        await refreshWikiTree();
+      } catch (err) {
+        vscode.window.showErrorMessage(`刷新 Wiki 列表失败：${(err as Error).message}`);
+      }
+    }),
+    vscode.commands.registerCommand("axon.wiki.openPage", async (pagePath?: string) => {
+      if (!pagePath) return;
+      try {
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(pagePath));
+        await vscode.window.showTextDocument(doc, { preview: false });
+      } catch (err) {
+        vscode.window.showErrorMessage(`打开 Wiki 页面失败：${(err as Error).message}`);
+      }
     }),
     vscode.commands.registerCommand("axon.openSkill", async (arg?: { name?: string; source?: string; skillFile?: string; create?: boolean }) => {
       // builtin skill：无实体文件，正文在内存常量里。提示用户这是内置 skill
@@ -575,17 +1508,21 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // 左侧管理面板 TreeView（Relay / Skills / Powers / Provider）
-  const { relayTree, skillsTree, providerTree, agentsTree, powersTree, customSkillsTree, mcpTree } = registerTreeViews(context);
+  // 左侧管理面板 TreeView（Relay / Wiki / Skills / Powers / Provider）
+  const { relayTree, wikiTasksTree, wikiTree, wikiView, skillsTree, providerTree, powersTree, customSkillsTree, mcpTree } = registerTreeViews(context);
 
   // Skill 树刷新辅助
   const refreshSkillTree = async () => {
     try {
-      const { SkillRegistry, globalSkillsDir, workspaceSkillsDir } = await import("@axon/core");
+      const { SkillRegistry, PowerRegistry, globalSkillsDir, workspaceSkillsDir } = await import("@axon/core");
       const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-      const registry = new SkillRegistry([defaultWorkspace], createHost(), homedir());
+      const host = createHost();
+      const powers = new PowerRegistry([defaultWorkspace], host, homedir());
+      // 注入 Power 捆绑的 skills：否则会出现「AI 能 use_skill 加载、用户在面板里却看不到」
+      const registry = new SkillRegistry([defaultWorkspace], host, homedir(), () => powers.getActiveSkillDirs());
       const skills = await registry.discover();
-      skillsTree.refresh(skills.map((s) => ({ name: s.name, source: s.source, disabled: s.disabled, skillFile: s.skillFile })));
+      // 带 dir：Skill 节点要能展开列出 scripts/assets 等内部文件
+      skillsTree.refresh(skills.map((s) => ({ name: s.name, source: s.source, disabled: s.disabled, skillFile: s.skillFile, dir: s.dir })));
       customSkillsTree.refresh(
         skills.map((s) => ({ name: s.name, source: s.source, disabled: s.disabled, skillFile: s.skillFile, dir: s.dir })),
         workspaceSkillsDir(defaultWorkspace),
@@ -599,26 +1536,28 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("axon.skill.toggle", async (item?: vscode.TreeItem) => {
       if (!item || !item.command?.arguments?.[0]) return;
       const arg = item.command.arguments[0] as { name: string; source: string; disabled?: boolean };
-      if (arg.source === "builtin") {
-        vscode.window.showInformationMessage("内置 Skill 不能禁用。如需替换，可在工作区或全局创建一个同名 skill 覆盖它。");
-        return;
-      }
-      const { SkillRegistry } = await import("@axon/core");
+      const { SkillRegistry, PowerRegistry, isBuiltinPowerBundledSkill } = await import("@axon/core");
       const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-      const registry = new SkillRegistry([defaultWorkspace], createHost(), homedir());
+      const host = createHost();
+      const powers = new PowerRegistry([defaultWorkspace], host, homedir());
+      const registry = new SkillRegistry([defaultWorkspace], host, homedir(), () => powers.getActiveSkillDirs());
       const metas = await registry.discover();
       const meta = metas.find((m) => m.name === arg.name);
       if (!meta) return;
-      const path = require("path");
-      const { writeFile, rm } = require("fs/promises");
-      const markerPath = path.join(meta.dir, ".disabled");
-      const willDisable = !arg.disabled; // 当前状态取反
+      // 内置 Power 捆绑的 skill 在只读产物目录里：禁不掉（写不进 .disabled），升级还会覆盖。
+      // 要关闭只能整包禁用，要定制只能放同名 skill 覆盖——给出可操作的指引，而不是让它撞写文件错误。
+      if (isBuiltinPowerBundledSkill(meta.source, meta.dir)) {
+        vscode.window.showInformationMessage(
+          "该 Skill 来自内置 Power 捆绑（只读目录），不能单独禁用。如需关闭，请在 Powers 面板禁用整个能力包；如需覆盖，可在工作区或全局创建一个同名 skill。",
+        );
+        return;
+      }
+      // 按后端当前状态取反，而不是用树条目的陈旧快照——否则连点两次会来回抵消
+      const willDisable = !meta.disabled;
       try {
-        if (willDisable) {
-          await writeFile(markerPath, "", "utf-8");
-        } else {
-          await rm(markerPath, { force: true });
-        }
+        // 交给 registry.setEnabled 分流：内置方法论写用户级禁用名单（它没有磁盘目录可放标记），
+        // 其余仍写自身目录的 .disabled。
+        await registry.setEnabled(meta, willDisable);
         await refreshSkillTree();
         vscode.window.showInformationMessage(`Skill「${arg.name}」已${willDisable ? "禁用" : "启用"}`);
       } catch (err) {
@@ -626,9 +1565,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
     vscode.commands.registerCommand("axon.skill.installFromMarketplace", async () => {
-      const { MarketplaceRegistry } = await import("@axon/core");
-      const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-      const registry = new MarketplaceRegistry(homedir(), createHost());
+      const registry = await createMarketplaceRegistry();
       const sources = await registry.listSources();
       if (sources.length === 0) {
         vscode.window.showInformationMessage("还没有配置任何 Marketplace 源，请先添加一个团队仓库地址。", "添加源")
@@ -661,19 +1598,12 @@ export function activate(context: vscode.ExtensionContext): void {
       const selectedItem = skillItems.find((i) => i.name === itemChoice.label && i.path === itemChoice.detail);
       if (!selectedItem) return;
 
-      const locationChoice = await vscode.window.showQuickPick(
-        ["安装到项目", "安装到全局"],
-        { placeHolder: "安装到哪里？" },
-      );
-      if (!locationChoice) return;
-      const isProject = locationChoice === "安装到项目";
-
       try {
         const content = await registry.downloadItemContent(sourceChoice.label, selectedItem.path);
-        const { parseFrontmatter, globalSkillsDir, workspaceSkillsDir } = await import("@axon/core");
+        const { parseFrontmatter, globalSkillsDir } = await import("@axon/core");
         const { name } = parseFrontmatter(content);
         if (!name) throw new Error("SKILL.md 缺少 frontmatter 中的 name 字段");
-        const baseDir = isProject ? workspaceSkillsDir(defaultWorkspace) : globalSkillsDir(homedir());
+        const baseDir = globalSkillsDir(homedir());
         const dir = require("path").join(baseDir, name);
         await vscode.workspace.fs.createDirectory(vscode.Uri.file(dir));
         await vscode.workspace.fs.writeFile(vscode.Uri.file(require("path").join(dir, "SKILL.md")), new TextEncoder().encode(content));
@@ -683,22 +1613,14 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showErrorMessage(`安装失败：${(err as Error).message}`);
       }
     }),
-    vscode.commands.registerCommand("axon.skill.create", async (node?: unknown) => {
-      // 判断在哪个组创建：如果从右键菜单触发，node 可能是 SkillGroupNode
-      const choices = ["项目 Skill（当前工作区）", "全局 Skill（用户级）"];
-      let choice: string | undefined;
-      if (node && typeof node === "object" && "source" in node) {
-        choice = (node as { source: string }).source === "workspace" ? choices[0] : choices[1];
-      } else {
-        choice = await vscode.window.showQuickPick(choices, { placeHolder: "创建到哪里？" });
-      }
-      if (!choice) return;
-      const isProject = choice === choices[0];
+    vscode.commands.registerCommand("axon.skill.create", async () => {
+      // 目标固定为全局（~/.axon/skills）：与导入一致，不再追问"建在工作区还是全局"。
+      // 技能本就是跨项目复用的方法论，追问一次只是多一次点击。
       const name = await vscode.window.showInputBox({ prompt: "Skill 名称（英文、短横线分隔）", placeHolder: "my-skill" });
       if (!name || !name.trim()) return;
       const slugName = name.trim().toLowerCase().replace(/\s+/g, "-");
-      const { globalSkillsDir, workspaceSkillsDir } = await import("@axon/core");
-      const baseDir = isProject ? workspaceSkillsDir(defaultWorkspace) : globalSkillsDir(homedir());
+      const { globalSkillsDir } = await import("@axon/core");
+      const baseDir = globalSkillsDir(homedir());
       const path = require("path");
       const skillDir = path.join(baseDir, slugName);
       const skillFile = path.join(skillDir, "SKILL.md");
@@ -779,88 +1701,59 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showErrorMessage(`重命名失败：${(err as Error).message}`);
       }
     }),
-    vscode.commands.registerCommand("axon.skill.import", async (node?: unknown) => {
-      // 批量导入 Skill：支持「浏览多选目录」或「从父目录勾选」两种方式
-      const choices = ["导入到项目", "导入到全局"];
-      let choice: string | undefined;
-      if (node && typeof node === "object" && "source" in node) {
-        choice = (node as { source: string }).source === "workspace" ? choices[0] : choices[1];
-      } else {
-        choice = await vscode.window.showQuickPick(choices, { placeHolder: "导入到哪里？" });
-      }
-      if (!choice) return;
-      const isProject = choice === choices[0];
+    vscode.commands.registerCommand("axon.skill.import", async () => {
+      // 批量导入 Skill：支持「浏览多选目录」或「从父目录勾选」两种方式。
+      // 目标固定为全局（~/.axon/skills）：技能本就是跨项目复用的方法论，
+      // 每次导入都追问"放项目还是全局"只是一次多余点击；且没有打开工作区时那一步必然失败。
+      const path = require("path") as typeof import("path");
+
       const sourceDirs = await pickImportSourceDirs("Skill", "SKILL.md");
       if (!sourceDirs) return;
-      const { globalSkillsDir, workspaceSkillsDir } = await import("@axon/core");
-      const baseDir = isProject ? workspaceSkillsDir(defaultWorkspace) : globalSkillsDir(homedir());
-      const conflicts = await findNameConflicts(baseDir, sourceDirs);
+
+      // 复制只是第一步：目录里没有 SKILL.md 就永远扫不出来，所以复制前先归一化并校验。
+      const resolvedDirs: string[] = [];
+      const invalid: string[] = [];
+      const relocated: string[] = [];
+      for (const raw of sourceDirs) {
+        const found = await resolveSkillSourceDir(raw);
+        if (!found) {
+          invalid.push(path.basename(raw));
+          continue;
+        }
+        resolvedDirs.push(found.dir);
+        if (found.note) relocated.push(`${path.basename(raw)}（${found.note}）`);
+      }
+      if (invalid.length > 0) {
+        const proceed = await vscode.window.showWarningMessage(
+          `${invalid.length} 个目录里没有找到 SKILL.md（或找到多个无法确定）：${invalid.join("、")}。请选择包含 SKILL.md 的目录本身。`,
+          { modal: true },
+          "跳过这些，导入其余",
+        );
+        if (!proceed) return;
+      }
+      if (resolvedDirs.length === 0) {
+        vscode.window.showErrorMessage("没有可导入的 Skill 目录。");
+        return;
+      }
+      if (relocated.length > 0) {
+        vscode.window.showInformationMessage(`已自动定位 SKILL.md：${relocated.join("；")}`);
+      }
+
+      const { globalSkillsDir } = await import("@axon/core");
+      const baseDir = globalSkillsDir(homedir());
+      const conflicts = await findNameConflicts(baseDir, resolvedDirs);
       const strategy = await resolveOverwriteStrategy("Skill", conflicts.size);
       if (!strategy) return;
-      const results = await copyDirsInto(baseDir, sourceDirs, { conflicts, strategy });
+      const results = await copyDirsInto(baseDir, resolvedDirs, { conflicts, strategy });
       await refreshSkillTree();
       reportImportResults("Skill", results);
+      await cleanupImportTemp();
+    }),
+    vscode.commands.registerCommand("axon.skill.refresh", async () => {
+      await refreshSkillTree();
+      vscode.window.setStatusBarMessage("Skills 已刷新", 2000);
     }),
   );
-
-  // ── Agent 树刷新辅助 ──────────────────────────────────────────────────────
-  const refreshAgentTree = async () => {
-    try {
-      const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-      const { listCustomAgents } = await import("@axon/core");
-      // 全局目录：~/.axon/agents/
-      const homeDir = require("os").homedir();
-      const agents = await listCustomAgents(homeDir, createHost());
-      agentsTree.refresh(agents.map((a: any) => ({
-        name: a.name,
-        description: a.description || "",
-        path: a.skillFile,
-      })));
-    } catch { /* ignore */ }
-  };
-
-  // Agent 命令：打开 Agent 编辑器（表单模式）
-  context.subscriptions.push(
-    vscode.commands.registerCommand("axon.openAgent", async (arg?: any) => {
-      const info = arg?.info || arg;
-      const filePath = info?.path || arg?.path;
-      if (!filePath) return;
-      try {
-        await vscode.workspace.fs.stat(vscode.Uri.file(filePath));
-        await AgentEditor.open(filePath, false);
-      } catch {
-        vscode.window.showWarningMessage("Agent 文件不存在");
-      }
-    }),
-    // Agent 命令：刷新列表
-    vscode.commands.registerCommand("axon.agent.refresh", async () => {
-      await refreshAgentTree();
-    }),
-  );
-
-  // Agent 命令：创建（草稿存内存，保存时才落盘，不污染 Agent 列表）
-  context.subscriptions.push(
-    vscode.commands.registerCommand("axon.agent.create", async () => {
-      await AgentEditor.createDraft();
-    }),
-  );
-
-  // Agent 命令：删除
-  context.subscriptions.push(
-    vscode.commands.registerCommand("axon.agent.delete", async (arg?: any) => {
-      const info = arg?.info || arg;
-      if (!info?.path || !info?.name) return;
-      const confirmed = await vscode.window.showWarningMessage(`删除 Agent "${info.name}"？`, { modal: true }, "删除");
-      if (confirmed !== "删除") return;
-      try {
-        await vscode.workspace.fs.delete(vscode.Uri.file(info.path));
-        await refreshAgentTree();
-      } catch (err) { vscode.window.showErrorMessage("删除失败：" + String(err)); }
-    }),
-  );
-
-  // 启动时初始化 Agent 列表
-  refreshAgentTree();
 
   // Power 树刷新辅助
   const refreshPowerTree = async () => {
@@ -907,9 +1800,7 @@ export function activate(context: vscode.ExtensionContext): void {
       });
     }),
     vscode.commands.registerCommand("axon.power.installFromMarketplace", async () => {
-      const { MarketplaceRegistry } = await import("@axon/core");
-      const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
-      const registry = new MarketplaceRegistry(homedir(), createHost());
+      const registry = await createMarketplaceRegistry();
       const sources = await registry.listSources();
       if (sources.length === 0) {
         vscode.window.showInformationMessage("还没有配置任何 Marketplace 源，请先添加一个团队仓库地址。", "添加源")
@@ -942,19 +1833,12 @@ export function activate(context: vscode.ExtensionContext): void {
       const selectedItem = powerItems.find((i) => i.name === itemChoice.label && i.path === itemChoice.detail);
       if (!selectedItem) return;
 
-      const locationChoice = await vscode.window.showQuickPick(
-        ["安装到项目", "安装到全局"],
-        { placeHolder: "安装到哪里？" },
-      );
-      if (!locationChoice) return;
-      const isProject = locationChoice === "安装到项目";
-
       try {
         const content = await registry.downloadItemContent(sourceChoice.label, selectedItem.path);
-        const { parsePowerFrontmatter, globalPowersDir, workspacePowersDir } = await import("@axon/core");
+        const { parsePowerFrontmatter, globalPowersDir } = await import("@axon/core");
         const { name } = parsePowerFrontmatter(content);
         if (!name) throw new Error("POWER.md 缺少 frontmatter 中的 name 字段");
-        const baseDir = isProject ? workspacePowersDir(defaultWorkspace) : globalPowersDir(homedir());
+        const baseDir = globalPowersDir(homedir());
         const dir = require("path").join(baseDir, name);
         await vscode.workspace.fs.createDirectory(vscode.Uri.file(dir));
         await vscode.workspace.fs.writeFile(vscode.Uri.file(require("path").join(dir, "POWER.md")), new TextEncoder().encode(content));
@@ -975,15 +1859,12 @@ export function activate(context: vscode.ExtensionContext): void {
       });
     }),
     vscode.commands.registerCommand("axon.power.create", async () => {
-      const choices = ["项目 Power（当前工作区）", "全局 Power（用户级）"];
-      const choice = await vscode.window.showQuickPick(choices, { placeHolder: "创建到哪里？" });
-      if (!choice) return;
-      const isProject = choice === choices[0];
+      // 目标固定为全局（~/.axon/powers），与导入一致。
       const name = await vscode.window.showInputBox({ prompt: "Power 名称（英文、短横线分隔）", placeHolder: "my-power" });
       if (!name || !name.trim()) return;
       const slugName = name.trim().toLowerCase().replace(/\s+/g, "-");
       // 重名校验
-      const { PowerRegistry, globalPowersDir, workspacePowersDir } = await import("@axon/core");
+      const { PowerRegistry, globalPowersDir } = await import("@axon/core");
       const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
       const registry = new PowerRegistry([defaultWorkspace], createHost(), homedir());
       const existing = await registry.discover();
@@ -992,7 +1873,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       const path = require("path");
-      const baseDir = isProject ? workspacePowersDir(defaultWorkspace) : globalPowersDir(homedir());
+      const baseDir = globalPowersDir(homedir());
       const powerDir = path.join(baseDir, slugName);
       const powerFile = path.join(powerDir, "POWER.md");
       // 创建目录和模板 POWER.md
@@ -1038,38 +1919,95 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("axon.power.toggle", async (item?: vscode.TreeItem) => {
       if (!item || !item.command?.arguments?.[0]) return;
-      const arg = item.command.arguments[0] as { name: string; dir: string; enabled: boolean };
-      const path = require("path");
-      const markerPath = path.join(arg.dir, ".disabled");
+      const arg = item.command.arguments[0] as { name: string };
       try {
-        if (arg.enabled) {
-          // 当前启用 → 禁用
-          await vscode.workspace.fs.writeFile(vscode.Uri.file(markerPath), new Uint8Array());
-        } else {
-          // 当前禁用 → 启用
-          await vscode.workspace.fs.delete(vscode.Uri.file(markerPath));
+        const { PowerRegistry } = await import("@axon/core");
+        const { createVSCodeAgentHost: createHost } = await import("@axon/host-vscode");
+        const registry = new PowerRegistry([defaultWorkspace], createHost(), homedir());
+        // 重新 discover 而不是直接用树条目的 enabled：树可能已过期，按下时要按当前真实状态取反。
+        const meta = (await registry.discover()).find((m) => m.name === arg.name);
+        if (!meta) {
+          vscode.window.showErrorMessage(`未找到 Power「${arg.name}」`);
+          return;
         }
+        // 交给 registry.setEnabled 分流：内置 power 写用户级启用名单，其余写自身目录的 .disabled。
+        // 内置 power 位于扩展包内（media/powers），运行期只读、升级会覆盖，不能往里写标记文件。
+        await registry.setEnabled(meta, !meta.enabled);
         await refreshPowerTree();
       } catch (err) {
         vscode.window.showErrorMessage(`操作失败：${(err as Error).message}`);
       }
     }),
     vscode.commands.registerCommand("axon.power.import", async () => {
-      // 批量导入 Power：支持「浏览多选目录」或「从父目录勾选」两种方式
-      const choices = ["导入到项目", "导入到全局"];
-      const choice = await vscode.window.showQuickPick(choices, { placeHolder: "导入到哪里？" });
-      if (!choice) return;
-      const isProject = choice === choices[0];
+      // 批量导入 Power：支持「浏览多选目录」「从父目录勾选」「从链接导入」三种方式。
+      // 目标固定为全局（~/.axon/powers），与 Skill 导入保持一致——每次追问"放项目还是全局"
+      // 只是一次多余点击，且没有打开工作区时那条分支必然失败。
+      const path = require("path") as typeof import("path");
       const sourceDirs = await pickImportSourceDirs("Power", "POWER.md");
       if (!sourceDirs) return;
-      const { globalPowersDir, workspacePowersDir } = await import("@axon/core");
-      const baseDir = isProject ? workspacePowersDir(defaultWorkspace) : globalPowersDir(homedir());
-      const conflicts = await findNameConflicts(baseDir, sourceDirs);
+
+      // 与 Skill 导入同样的归一化：用户常直接选整个仓库根，POWER.md 其实在子目录里。
+      // 都没有 POWER.md 时再退一步：若是 Claude Code Plugin 格式（只有 .claude-plugin/ 与 skills/），
+      // 就地转成 Power（复制到临时目录 + 补写 POWER.md），不再要求用户自己去翻目录。
+      const resolvedDirs: string[] = [];
+      const invalid: string[] = [];
+      const relocated: string[] = [];
+      const convertedNames: string[] = [];
+      const claudePlugins: ClaudePluginSource[] = [];
+      for (const raw of sourceDirs) {
+        const found = await resolveSkillSourceDir(raw, "POWER.md");
+        if (!found) {
+          const plugins = await resolveClaudePluginSources(raw);
+          if (plugins.length > 0) claudePlugins.push(...plugins);
+          else invalid.push(path.basename(raw));
+          continue;
+        }
+        resolvedDirs.push(found.dir);
+        if (found.note) relocated.push(`${path.basename(raw)}（${found.note}）`);
+      }
+      if (claudePlugins.length > 0) {
+        resolvedDirs.push(...(await convertClaudePlugins(claudePlugins)));
+        convertedNames.push(...claudePlugins.map((p) => p.name));
+      }
+      if (invalid.length > 0) {
+        const proceed = await vscode.window.showWarningMessage(
+          `${invalid.length} 个目录里既没有 POWER.md，也不是 Claude Code 插件格式（缺少 .claude-plugin/）：${invalid.join("、")}。` +
+            `请选择包含 POWER.md 的目录本身，或含 .claude-plugin/marketplace.json 的插件仓库根。`,
+          { modal: true },
+          "跳过这些，导入其余",
+        );
+        if (!proceed) {
+          await cleanupImportTemp();
+          return;
+        }
+      }
+      if (resolvedDirs.length === 0) {
+        await cleanupImportTemp();
+        vscode.window.showErrorMessage("没有可导入的 Power 目录。");
+        return;
+      }
+      if (relocated.length > 0) {
+        vscode.window.showInformationMessage(`已自动定位 POWER.md：${relocated.join("；")}`);
+      }
+      if (convertedNames.length > 0) {
+        vscode.window.showInformationMessage(
+          `已按 Claude Plugin 格式转换并补写 POWER.md：${convertedNames.join("、")}`,
+        );
+      }
+
+      const { globalPowersDir } = await import("@axon/core");
+      const baseDir = globalPowersDir(homedir());
+      const conflicts = await findNameConflicts(baseDir, resolvedDirs);
       const strategy = await resolveOverwriteStrategy("Power", conflicts.size);
       if (!strategy) return;
-      const results = await copyDirsInto(baseDir, sourceDirs, { conflicts, strategy });
+      const results = await copyDirsInto(baseDir, resolvedDirs, { conflicts, strategy });
       await refreshPowerTree();
       reportImportResults("Power", results);
+      await cleanupImportTemp();
+    }),
+    vscode.commands.registerCommand("axon.power.refresh", async () => {
+      await refreshPowerTree();
+      vscode.window.setStatusBarMessage("Powers 已刷新", 2000);
     }),
     vscode.commands.registerCommand("axon.power.importSkills", async (item?: vscode.TreeItem) => {
       // 向已有 Power 批量导入 Skills：支持「浏览多选目录」或「从父目录勾选」
@@ -1086,6 +2024,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const results = await copyDirsInto(skillsDir, sourceDirs, { conflicts, strategy });
       await refreshPowerTree();
       reportImportResults("Skill", results);
+      await cleanupImportTemp();
     }),
     vscode.commands.registerCommand("axon.power.importSteering", async (item?: vscode.TreeItem) => {
       // 向已有 Power 批量导入 Steering 文件
@@ -1130,7 +2069,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // 底部状态栏 Axon 入口（点击打开右侧 AI 对话栏）
   registerAxonStatusBar(context);
   // 底部状态栏 Credits 用量：独立按钮，priority=101，显示在 Axon(100) 左边。
-  const usageStatusBar = registerAxonUsageStatusBar(context);
+  usageStatusBar = registerAxonUsageStatusBar(context, defaultWorkspace);
   context.subscriptions.push(vscode.commands.registerCommand("axon.usage.refresh", () => usageStatusBar.refresh()));
 
   // 编辑器行号右键菜单：使用 Git 追溯注解（对标 IDEA Annotate）
@@ -1142,8 +2081,58 @@ export function activate(context: vscode.ExtensionContext): void {
   // Quick Fix → "Ask Axon"：让 AI 一键修复诊断问题
   registerAskAxonCodeAction(context, provider);
 
+  // ── Wiki 生成进度 ────────────────────────────────────────────────────────
+  //
+  // 两条通道，都不弹窗、都不挡视线：
+  //   ① 状态栏项 —— 带 spinner、显示当前阶段与页数，点击即取消（wikiStatusItem）
+  //   ② Wiki 面板内的 message —— 打开该面板就能看到当前阶段
+  //
+  // 为什么不用「带取消按钮的进度通知」：那种通知没有关闭按钮
+  // （notificationsViewer 里只有非进度通知才渲染 close），长任务期间它只能靠
+  // 点「取消」消失 —— 而取消会中止整个生成。用户被逼着在「忍受遮挡」和「中止任务」
+  // 之间二选一，这正是这条设计要避开的。
+  // 不进聊天则是另一个理由：生成过程有几十步工具调用，灌进对话会把界面淹掉。
+  // 共享状态（wikiStatusItem / wikiGenerating）声明在上方 refreshWikiTree 之前。
   // 监听 Agent 事件：relay_updated / relay_deleted 时刷新左侧 Relay 树
   channel.onEmit(async (event: any) => {
+    if (event.type === "wiki_generation") {
+      const e = event.event as { type: string; [k: string]: any };
+      // 归属取自事件本身（每条 wiki_generation 都带 workspace），而不是生成命令里设的变量：
+      // 这样无论由哪个入口发起生成，显示出的都是权威值。
+      if (e.workspace) wikiTargetName = basename(e.workspace as string);
+      // 进度直接挂在目标应用节点上（见 WikiTreeProvider.setGenerating），不再用视图顶部的
+      // message：两者本来说的就是同一件事，而节点还能回答 message 答不了的
+      // 「在生成【哪个】应用」—— 这个面板列着所有工作区，那才是用户最先要知道的。
+      if (e.type === "planning") {
+        // 规划阶段要通读仓库、可能几十秒，所以这里就必须亮出 spinner；
+        // 否则从点按钮到第一页落盘之间毫无动静，用户会以为没生效。
+        wikiTree.setGenerating({ workspace: e.workspace, done: 0, total: 0 });
+        setWikiProgress("正在勘察仓库、规划页面…");
+      } else if (e.type === "planned") {
+        const n = (e.pages as unknown[]).length;
+        wikiTree.setGenerating({ workspace: e.workspace, done: 0, total: n });
+        setWikiProgress(`共 ${n} 页，开始生成…`);
+      } else if (e.type === "page_saved") {
+        wikiTree.setGenerating({ workspace: e.workspace, done: e.done, total: e.total, current: e.title });
+        setWikiProgress(`${e.done}/${e.total}：${e.title}`);
+      } else if (e.type === "page_failed") {
+        // 单页失败不终止整体，但要让用户知道有一页没成。
+        // 节点上的进度刻意不动：失败的页没有落盘，进度本就该停在那儿（明细见结束通知）。
+        setWikiProgress(`${e.title} 未成功，继续…`);
+      } else if (e.type === "finished") {
+        // 收掉节点上的 spinner：残留会让它一直转下去，看着像卡住了
+        wikiTree.setGenerating(null);
+        // 结果提示同样带归属：长任务结束时用户多半没盯着看，
+        // 不写清是哪个应用，「完成 14 页」就成了没有主语的一句话。
+        const doneMsg = wikiMsg(e.message as string);
+        // 用户主动取消既不是成功也不是失败 —— 弹黄色警告属于误报
+        if (e.cancelled) vscode.window.showInformationMessage(doneMsg);
+        else if (e.ok) vscode.window.showInformationMessage(doneMsg);
+        else vscode.window.showWarningMessage(doneMsg);
+        void refreshWikiTree().catch(() => { /* 刷新失败不影响结果提示 */ });
+      }
+      return;
+    }
     if (event.type === "relay_updated" || event.type === "relay_deleted") {
       try {
         const relays = await listAllRelays();
@@ -1170,13 +2159,18 @@ export function activate(context: vscode.ExtensionContext): void {
       const relays = await listAllRelays();
       relayTree.refresh(relays);
 
-      // Skills 列表
-      const { SkillRegistry } = await import("@axon/core");
+      // Wiki 列表（读 .axon/wiki/ + 判定陈旧，零 LLM 成本）
+      await refreshWikiTree();
+
+      // Skills 列表（注入 Power 捆绑的 skills，与 refreshSkillTree 保持一致）
+      const { SkillRegistry, PowerRegistry, globalSkillsDir, workspaceSkillsDir } = await import("@axon/core");
       const { createVSCodeAgentHost: createHost2 } = await import("@axon/host-vscode");
-      const registry = new SkillRegistry([defaultWorkspace], createHost2(), homedir());
+      const host2 = createHost2();
+      const powerRegistry = new PowerRegistry([defaultWorkspace], host2, homedir());
+      const registry = new SkillRegistry([defaultWorkspace], host2, homedir(), () => powerRegistry.getActiveSkillDirs());
       const skills = await registry.discover();
-      skillsTree.refresh(skills.map((s) => ({ name: s.name, source: s.source, disabled: s.disabled, skillFile: s.skillFile })));
-      const { globalSkillsDir, workspaceSkillsDir } = await import("@axon/core");
+      // 带 dir：Skill 节点要能展开列出 scripts/assets 等内部文件
+      skillsTree.refresh(skills.map((s) => ({ name: s.name, source: s.source, disabled: s.disabled, skillFile: s.skillFile, dir: s.dir })));
       customSkillsTree.refresh(
         skills.map((s) => ({ name: s.name, source: s.source, disabled: s.disabled, skillFile: s.skillFile, dir: s.dir })),
         workspaceSkillsDir(defaultWorkspace),
@@ -1184,9 +2178,6 @@ export function activate(context: vscode.ExtensionContext): void {
       );
 
       // Powers 列表
-      const { PowerRegistry } = await import("@axon/core");
-      const { createVSCodeAgentHost: createHost3 } = await import("@axon/host-vscode");
-      const powerRegistry = new PowerRegistry([defaultWorkspace], createHost3(), homedir());
       const powers = await powerRegistry.discover();
       powersTree.refresh(powers.map((p) => ({
         name: p.name,
@@ -1200,7 +2191,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
       // MCP 列表（三来源合并：用户级 + 工作区级 + Power 内嵌）
       const { McpRegistry } = await import("@axon/core");
-      const mcpRegistry = new McpRegistry([defaultWorkspace], createHost3(), homedir(), powerRegistry);
+      const mcpRegistry = new McpRegistry([defaultWorkspace], host2, homedir(), powerRegistry);
       const mcpSpecs = await mcpRegistry.resolve(true);
       mcpTree.refresh(mcpSpecs.map((s) => ({ name: s.name, source: s.source, disabled: !!s.disabled })));
     } catch (err) {
@@ -1227,6 +2218,65 @@ export function activate(context: vscode.ExtensionContext): void {
   mcpWatcher.onDidCreate(refreshMcpTree);
   mcpWatcher.onDidDelete(refreshMcpTree);
   context.subscriptions.push(mcpWatcher);
+
+  // Wiki 页面变动时刷新侧边栏（手改 / 新增 / 删除 .md 都会被看到）。
+  // 加 200ms 去抖：生成一页会先后写 .md 与 .state.json，不去抖会连触发两次刷新。
+  // 检测本身不调 LLM，频繁触发无成本顾虑。
+  let wikiRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduleWikiRefresh = () => {
+    if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer);
+    wikiRefreshTimer = setTimeout(() => {
+      wikiRefreshTimer = undefined;
+      void refreshWikiTree().catch(() => { /* 列表刷新失败不该影响主流程 */ });
+    }, 200);
+  };
+  const wikiWatcher = vscode.workspace.createFileSystemWatcher("**/.axon/wiki/*");
+  wikiWatcher.onDidChange(scheduleWikiRefresh);
+  wikiWatcher.onDidCreate(scheduleWikiRefresh);
+  wikiWatcher.onDidDelete(scheduleWikiRefresh);
+  context.subscriptions.push(wikiWatcher, { dispose: () => { if (wikiRefreshTimer) clearTimeout(wikiRefreshTimer); } });
+
+  // 依据文件变了也要刷新：否则侧边栏的「待复核」要等重启或手动刷新才更新，
+  // 而聊天里的记忆召回卡片每轮都是新算的 —— 两边数字对不上。
+  // 只关心页面引用过的那些文件；稍等一会儿再刷，批量改动（格式化、切分支）只刷一次。
+  function onMaybeSourceChange(uri: vscode.Uri): void {
+    if (!wikiSourcePaths.has(normPathKey(uri.fsPath))) return;
+    if (wikiSourceTimer) clearTimeout(wikiSourceTimer);
+    wikiSourceTimer = setTimeout(() => {
+      wikiSourceTimer = undefined;
+      void refreshWikiTree().catch(() => { /* 列表刷新失败不该影响主流程 */ });
+    }, 1500);
+  }
+  // 只监听页面引用过的那些文件（每个工作区一个 RelativePattern，用 {a,b,c} 列出路径），列表变了就重建。
+  // 早先是一个 "**/*" 监听器：构建、git checkout、node_modules 的每次变动都要送进扩展进程，
+  // 没有 Wiki 的用户也在白白付这个代价。
+  function rewatchWikiSources(pages: { workspace: string; sources: string[] }[]): void {
+    const byWs = new Map<string, Set<string>>();
+    for (const p of pages) {
+      for (const src of p.sources) {
+        if (!byWs.has(p.workspace)) byWs.set(p.workspace, new Set());
+        byWs.get(p.workspace)!.add(src.replace(/\\/g, "/").replace(/[{}]/g, ""));
+      }
+    }
+    const key = [...byWs].map(([ws, s]) => `${ws}:${[...s].sort().join(",")}`).sort().join("|");
+    if (key === wikiWatchKey) return;
+    wikiWatchKey = key;
+    wikiSourceWatchers.forEach((d) => d.dispose());
+    wikiSourceWatchers = [];
+    for (const [ws, srcs] of byWs) {
+      const list = [...srcs];
+      const glob = list.length === 1 ? list[0] : `{${list.join(",")}}`;
+      const w = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(ws, glob), true, false, false);
+      w.onDidChange(onMaybeSourceChange);
+      w.onDidDelete(onMaybeSourceChange);
+      wikiSourceWatchers.push(w);
+    }
+  }
+  context.subscriptions.push({ dispose: () => {
+    if (wikiSourceTimer) clearTimeout(wikiSourceTimer);
+    wikiSourceWatchers.forEach((d) => d.dispose());
+  } });
+
 
   // 手动刷新命令（树标题栏刷新按钮用）
   context.subscriptions.push(
@@ -1327,7 +2377,7 @@ export function activate(context: vscode.ExtensionContext): void {
         name: p.name, label: p.label, builtin: p.builtin, locked: p.locked,
         configured: p.configured, modelCount: p.models.length,
       })));
-      void usageStatusBar.refresh();
+      void usageStatusBar?.refresh();
     } catch (err) {
       console.warn("[axon] provider 树刷新失败:", (err as Error).message);
     }
@@ -1335,18 +2385,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // 用户级 providers.json 路径助手（树发起的增删改默认写用户级，工作区级由 Studio 管理）
   const userProvidersJson = () => join(homedir(), ".axon", "settings", "providers.json");
-  const readProvidersJson = async (): Promise<{ providers: Record<string, unknown>; builtinApiKeys: Record<string, string> }> => {
-    const { readFile } = await import("node:fs/promises");
-    try {
-      const p = JSON.parse(await readFile(userProvidersJson(), "utf-8"));
-      return { providers: p.providers || {}, builtinApiKeys: p.builtinApiKeys || {} };
-    } catch { return { providers: {}, builtinApiKeys: {} }; }
+  // 读写都保留文件里的其它字段（builtinBaseUrls、builtinModels…）：只改树上动到的那部分。
+  // 文件损坏时读取直接报错，不会拿空配置把它覆盖掉（见 safeConfigFile）。
+  const readProvidersJson = async (): Promise<Record<string, unknown> & { providers: Record<string, unknown>; builtinApiKeys: Record<string, string> }> => {
+    const p = (await readJsonConfig<Record<string, unknown>>(userProvidersJson())) ?? {};
+    return { ...p, providers: (p.providers as Record<string, unknown>) || {}, builtinApiKeys: (p.builtinApiKeys as Record<string, string>) || {} };
   };
-  const writeProvidersJson = async (cfg: { providers: Record<string, unknown>; builtinApiKeys: Record<string, string> }): Promise<void> => {
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    const { dirname } = await import("node:path");
-    await mkdir(dirname(userProvidersJson()), { recursive: true });
-    await writeFile(userProvidersJson(), JSON.stringify(cfg, null, 2), "utf-8");
+  const writeProvidersJson = async (cfg: Record<string, unknown>): Promise<void> => {
+    await writeJsonConfig(userProvidersJson(), cfg);
   };
 
   const providersWatcher = vscode.workspace.createFileSystemWatcher("**/.axon/settings/providers.json");
@@ -1364,6 +2410,10 @@ export function activate(context: vscode.ExtensionContext): void {
         query: `view=providers&workspace=${encodeURIComponent(workspace)}`,
         extensionUri: context.extensionUri,
         router,
+        onProvidersChanged: () => {
+          provider.postToWebview({ type: "providers_changed" });
+          void refreshProviderTree();
+        },
         icon: "media/powers.svg",
       });
     }),
@@ -1426,6 +2476,11 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 }
 
-export function deactivate(): void {
-  /* 资源由 context.subscriptions 自动释放 */
+/** 停用时要异步收尾的资源（MCP 子进程、Playwright 浏览器）；activate 里赋值 */
+let disposeOnDeactivate: (() => Promise<void>) | undefined;
+
+export async function deactivate(): Promise<void> {
+  // 其余资源由 context.subscriptions 自动释放；这几类是子进程，必须显式关闭
+  await stopRecording(true).catch(() => null); // 还在录音就丢掉，别让麦克风一直开着
+  await disposeOnDeactivate?.();
 }

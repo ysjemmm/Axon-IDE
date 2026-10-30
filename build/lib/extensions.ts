@@ -315,6 +315,77 @@ const excludedExtensions = [
 	'vscode-test-resolver',
 	'ms-vscode.node-debug',
 	'ms-vscode.node-debug2',
+
+	// ── Axon 产品裁剪：以下内置扩展不进安装包 ────────────────────────────────
+	// 这些扩展与「AI IDE」定位无关，留在产物里只是白占体积与扩展宿主启动时的扫描开销。
+	//
+	// ⚠️ 刻意保留的（不要加进来）：
+	//   · theme-defaults / theme-seti —— 默认亮暗主题 + 文件图标，删了首次启动没有可用外观
+	//   · git / git-base —— 依赖它的 Git 注解与 SCM 功能
+	//   · merge-conflict / configuration-editing —— 编辑器基础体验
+	//   · javascript / typescript-basics / css / html / json / markdown-basics / xml / yaml
+	//     —— 主力语言高亮，且被对应的 *-language-features 引用
+	//   · python / java / go / rust / cpp / csharp / php / ruby / sql / shellscript
+	//     / powershell / docker / diff / ini / log / dotenv —— 常见语言高亮
+	//
+	// 语言基础扩展：只摘掉冷门语言（本体体积小，主要省扩展宿主扫描/激活开销）
+	'bat',
+	'clojure',
+	'coffeescript',
+	'dart',
+	'fsharp',
+	'groovy',
+	'handlebars',
+	'hlsl',
+	'julia',
+	'latex',
+	'lua',
+	'make',
+	'objective-c',
+	'perl',
+	'pug',
+	'r',
+	'razor',
+	'restructuredtext',
+	'shaderlab',
+	'swift',
+	'vb',
+
+	// 任务运行器：Grunt / Gulp / Jake / npm scripts 集成，AI IDE 场景用不到
+	'grunt',
+	'gulp',
+	'jake',
+	'npm',
+
+	// 装饰性配色主题（默认两套主题之外的备选）
+	'theme-abyss',
+	'theme-kimbie-dark',
+	'theme-monokai',
+	'theme-monokai-dimmed',
+	'theme-quietlight',
+	'theme-red',
+	'theme-solarized-dark',
+	'theme-solarized-light',
+	'theme-tomorrow-night-blue',
+
+	// ── 体积大件：这三个占了安装包里最重的几块，且各有明确理由去掉 ──
+	//
+	// · mermaid-markdown-features —— 只服务「.md 文件预览」与 notebook 的图表渲染。
+	//   Axon 自己的聊天面板有独立的 Mermaid 渲染（web/src/components/MarkdownRenderer.tsx，
+	//   走的是 axon-render 那套内联渲染），两者互不影响 —— 去掉它聊天里的流程图照常显示。
+	//   受影响范围仅限：Markdown 预览里写 ```mermaid 代码块时不再出图。
+	//
+	// · microsoft-authentication —— 微软账号登录，主要供「设置同步」使用。
+	//   Axon 有自己的 Provider 管理（ProviderStudio），不依赖它。
+	//   ⚠️ 它同时列在上面的 nativeExtensions 里（带 MSAL 原生依赖，单独打包流）。
+	//   已确认本排除列表对 native / 非 native 两条流都生效（见下方 doPackageLocalExtensionsStream
+	//   里两个 filter 的先后顺序），所以在这里排除是有效的。
+	//
+	// · terminal-suggest —— 终端里针对 zsh / bash / fish 的命令补全建议（onTerminalShellIntegration）。
+	//   去掉后终端不再弹出补全候选，其余终端功能不受影响。
+	'mermaid-markdown-features',
+	'microsoft-authentication',
+	'terminal-suggest',
 ];
 
 const marketplaceWebExtensionsExclude = new Set([

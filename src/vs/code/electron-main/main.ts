@@ -3,10 +3,12 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+// allow-any-unicode-comment-file
+
 import '../../platform/update/common/update.config.contribution.js';
 
 import { app, dialog } from 'electron';
-import { unlinkSync, promises } from 'fs';
+import { promises } from 'fs';
 import { URI } from '../../base/common/uri.js';
 import { coalesce, distinct } from '../../base/common/arrays.js';
 import { Promises, retry } from '../../base/common/async.js';
@@ -22,15 +24,11 @@ import { IProcessEnvironment, isLinux, isMacintosh, isWindows, OS } from '../../
 import { cwd } from '../../base/common/process.js';
 import { rtrim, trim } from '../../base/common/strings.js';
 import { Promises as FSPromises } from '../../base/node/pfs.js';
-import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
-import { Client as NodeIPCClient } from '../../base/parts/ipc/common/ipc.net.js';
-import { connect as nodeIPCConnect, serve as nodeIPCServe, Server as NodeIPCServer, XDG_RUNTIME_DIR } from '../../base/parts/ipc/node/ipc.net.js';
+import { serve as nodeIPCServe, Server as NodeIPCServer, XDG_RUNTIME_DIR } from '../../base/parts/ipc/node/ipc.net.js';
 import { CodeApplication } from './app.js';
 import { localize } from '../../nls.js';
 import { IConfigurationService } from '../../platform/configuration/common/configuration.js';
 import { ConfigurationService } from '../../platform/configuration/common/configurationService.js';
-import { IDiagnosticsMainService } from '../../platform/diagnostics/electron-main/diagnosticsMainService.js';
-import { DiagnosticsService } from '../../platform/diagnostics/node/diagnosticsService.js';
 import { NativeParsedArgs } from '../../platform/environment/common/argv.js';
 import { EnvironmentMainService, IEnvironmentMainService } from '../../platform/environment/electron-main/environmentMainService.js';
 import { addArg, parseMainProcessArgv } from '../../platform/environment/node/argvHelper.js';
@@ -42,7 +40,6 @@ import { SyncDescriptor } from '../../platform/instantiation/common/descriptors.
 import { IInstantiationService, ServicesAccessor } from '../../platform/instantiation/common/instantiation.js';
 import { InstantiationService } from '../../platform/instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../platform/instantiation/common/serviceCollection.js';
-import { ILaunchMainService } from '../../platform/launch/electron-main/launchMainService.js';
 import { ILifecycleMainService, LifecycleMainService } from '../../platform/lifecycle/electron-main/lifecycleMainService.js';
 import { BufferLogger } from '../../platform/log/common/bufferLog.js';
 import { ConsoleMainLogger, getLogLevel, ILoggerService, ILogService, isDevConsoleLogForwardingEnabled, registerDevConsoleLogForwarder } from '../../platform/log/common/log.js';
@@ -57,7 +54,6 @@ import { RequestService } from '../../platform/request/electron-utility/requestS
 import { ISignService } from '../../platform/sign/common/sign.js';
 import { SignService } from '../../platform/sign/node/signService.js';
 import { IStateReadService, IStateService } from '../../platform/state/node/state.js';
-import { NullTelemetryService } from '../../platform/telemetry/common/telemetryUtils.js';
 import { IThemeMainService } from '../../platform/theme/electron-main/themeMainService.js';
 import { IUserDataProfilesMainService, UserDataProfilesMainService } from '../../platform/userDataProfile/electron-main/userDataProfile.js';
 import { IPolicyService, NullPolicyService } from '../../platform/policy/common/policy.js';
@@ -380,20 +376,6 @@ class CodeMain {
 			message,
 			detail
 		}, productService).options);
-	}
-
-	private async windowsAllowSetForegroundWindow(launchMainService: ILaunchMainService, logService: ILogService): Promise<void> {
-		if (isWindows) {
-			const processId = await launchMainService.getMainProcessId();
-
-			logService.trace('Sending some foreground love to the running instance:', processId);
-
-			try {
-				(await import('windows-foreground-love')).allowSetForegroundWindow(processId);
-			} catch (error) {
-				logService.error(error);
-			}
-		}
 	}
 
 	private quit(accessor: ServicesAccessor, reason?: ExpectedError | Error): void {

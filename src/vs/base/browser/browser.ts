@@ -140,6 +140,25 @@ export function getWCOTitlebarAreaRect(targetWindow: Window): DOMRect | undefine
 	return (targetWindow.navigator as Navigator & { windowControlsOverlay?: { getTitlebarAreaRect: () => DOMRect } })?.windowControlsOverlay?.getTitlebarAreaRect();
 }
 
+/**
+ * Permissions-Policy tokens that delegate local network access to an iframe.
+ *
+ * Axon: Chromium renamed the single `local-network-access` feature to the pair
+ * `local-network` + `loopback-network` (Chromium 148 / Electron 42 only knows the new
+ * names). Passing an unknown token is not an error, but the browser logs
+ * "Unrecognized feature: 'local-network-access'" for every iframe and, more importantly,
+ * the delegation silently does not happen. Emit only the tokens this browser recognizes;
+ * when the list of supported features cannot be queried, keep the previous token.
+ */
+export function getLocalNetworkAllowRules(): string[] {
+	const featurePolicy = (document as Document & { featurePolicy?: { features(): string[] } }).featurePolicy;
+	if (!featurePolicy) {
+		return ['local-network-access'];
+	}
+	const supported = featurePolicy.features();
+	return ['local-network', 'loopback-network', 'local-network-access'].filter(feature => supported.includes(feature));
+}
+
 export interface IMonacoEnvironment {
 
 	createTrustedTypesPolicy?<Options extends TrustedTypePolicyOptions>(

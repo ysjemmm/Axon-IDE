@@ -12,15 +12,19 @@
  * 缺失时回退占位页，保证视图可加载、内核链路可联调。
  */
 
+import { isSafeExternalUrl } from "./safeConfigFile.js";
 import * as vscode from "vscode";
 import type { ControlCommand } from "@axon/core";
 import type { VSCodeChannel } from "./vscodeChannel.js";
 import type { RequestRouter } from "./requestRouter.js";
+import { WebviewStallWatchdog, type DiagHeartbeat } from "./webviewWatchdog.js";
 
 export class AxonViewProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "axon.chat";
 
   private view: vscode.WebviewView | null = null;
+  /** 监视 webview 是否失去响应（独立进程视角，卡死时唯一还能记录的一方） */
+  private watchdog: WebviewStallWatchdog | null = null;
 
   constructor(
     private context: vscode.ExtensionContext,
@@ -65,11 +69,38 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
     // 出站：绑定 channel
     this.channel.setWebview(view.webview);
 
+    // 启动失响应观察器：webview 心跳停了就说明界面卡了，由宿主侧记下现场
+    this.watchdog?.dispose();
+    this.watchdog = new WebviewStallWatchdog(() => view.visible);
+    this.watchdog.start();
+
     // 入站分流
     view.webview.onDidReceiveMessage(async (msg: unknown) => {
       if (!msg || typeof msg !== "object") return;
       const m = msg as Record<string, unknown>;
 
+      // 诊断心跳：只用于观察器判定存活，不参与任何业务逻辑
+      if (m.type === "diag_heartbeat") {
+        this.watchdog?.noteHeartbeat((m.payload ?? {}) as DiagHeartbeat);
+        return;
+      }
+
+      if (m.type === "mode_changed" && (m.mode === "agent" || m.mode === "quest" || m.mode === "cowork")) {
+        await vscode.commands.executeCommand("setContext", "axon.chatMode", m.mode);
+        return;
+      }
+      // 后台 Agent 任务完成：面板没开着时用 VS Code 通知提醒（开着时面板里自己有提醒）
+      if (m.type === "agent_task_notify" && typeof m.sessionId === "string") {
+        if (view.visible) return;
+        const title = typeof m.title === "string" ? m.title : "后台任务";
+        const text = m.status === "done" ? `后台任务完成：${title}` : m.status === "failed" ? `后台任务出错：${title}` : `后台任务已停止：${title}`;
+        const pick = await vscode.window.showInformationMessage(text, "查看");
+        if (pick === "查看") {
+          view.show?.(false);
+          void view.webview.postMessage({ type: "open_session", sessionId: m.sessionId });
+        }
+        return;
+      }
       // 聚焦 Axon 终端（从工具卡片"打开终端"按钮）
       if (m.type === "focus_terminal") {
         try {
@@ -87,6 +118,12 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
 
       // 用系统浏览器打开外部链接（webview 中 target=_blank 被拦截）
       if (m.type === "open_external" && typeof m.url === "string") {
+        // 只放行网页和邮件链接：页面内容来自模型输出，file:、vscode: 这类链接会交给系统默认程序打开，
+        // 等于让一段文字替用户打开本机文件或触发其它扩展的命令
+        if (!isSafeExternalUrl(m.url as string)) {
+          vscode.window.showWarningMessage(`已拦截不安全的链接：${String(m.url).slice(0, 120)}`);
+          return;
+        }
         try {
           await vscode.env.openExternal(vscode.Uri.parse(m.url as string));
         } catch {
@@ -135,6 +172,167 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
         } catch {
           // 文件不存在或无法打开，静默忽略
         }
+        return;
+      }
+
+      // 大文件落盘到系统临时目录，只把路径交给 Agent。
+      //
+      // 为什么需要它：webview 里拖拽/粘贴上传拿到的是浏览器 File 对象，没有本地路径，
+      // Agent 的 read_file 够不到。小文件直接把正文塞进消息没问题，但大文件这么做会
+      // 一次性灌爆上下文，而且剥夺了模型"先看概览、再按需精读"的选择权。
+      // 落盘后 Agent 就能用现成的 read_file 按行号分段取，不需要新增工具。
+      //
+      // 写到 os.tmpdir() 而不是工作区：这是会话期的中间产物，不该污染用户项目
+      // （与 document-forge 里"中间产物放临时目录"的约定一致）。
+      if (m.type === "stash_upload" && typeof m.requestId === "string") {
+        const path = require("path");
+        const fs = require("fs");
+        const os = require("os");
+        const rawName = typeof m.name === "string" ? m.name : "upload.txt";
+        // 只取基名并过滤路径分隔符：防止 "../" 之类的名字写到临时目录之外
+        const safeName = path.basename(rawName).replace(/[\\/:*?"<>|]/g, "_") || "upload.txt";
+        try {
+          const dir = path.join(os.tmpdir(), "axon-uploads", `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+          fs.mkdirSync(dir, { recursive: true });
+          const target = path.join(dir, safeName);
+          fs.writeFileSync(target, String(m.content ?? ""), "utf8");
+          this.postToWebview({
+            type: "upload_stashed",
+            clientId: typeof m.clientId === "string" ? (m.clientId as string) : undefined,
+            requestId: m.requestId as string,
+            path: target,
+          });
+        } catch (err) {
+          this.postToWebview({
+            type: "upload_stashed",
+            clientId: typeof m.clientId === "string" ? (m.clientId as string) : undefined,
+            requestId: m.requestId as string,
+            error: (err as Error).message,
+          });
+        }
+        return;
+      }
+
+      // 文件预览：宿主读文件，渲染交给 workbench 级 overlay（axon.showFilePreviewModal）。
+      //
+      // 为什么不回传 webview 自己渲染：webview 的 DOM 被裁在侧栏宽度内，表格和网页
+      // 根本放不下（实测被挤成竖条）。overlay 挂在 workbench 的 document.body 上，
+      // 才能盖住整个 IDE 窗口。
+      if (m.type === "preview_file" && typeof m.path === "string") {
+        void this.showFilePreview(String(m.path));
+        return;
+      }
+
+      // Cowork：原生文件选择器，拿文件的绝对路径。
+      //
+      // 为什么必须走原生对话框：webview 里的 <input type="file"> 和拖放都只能拿到
+      // File 对象，拿不到本地绝对路径（浏览器安全限制）。而 Cowork 处理的是 Excel/PDF
+      // 这类二进制大文件，Agent 需要真实路径才能用 openpyxl / pdfplumber 直接读 ——
+      // 把内容 base64 塞进消息既撑爆上下文也读不了二进制。
+      if (m.type === "cowork_pick_files" && typeof m.requestId === "string") {
+        const uris = await vscode.window.showOpenDialog({
+          canSelectFiles: true,
+          canSelectFolders: false,
+          canSelectMany: true,
+          openLabel: "选择要处理的文件",
+          title: "选择要处理的表格或文档",
+          filters: {
+            "表格与文档": ["xlsx", "xls", "csv", "docx", "doc", "pdf", "txt", "md"],
+            "所有文件": ["*"],
+          },
+        });
+        const files: { path: string; name: string; size: number }[] = [];
+        for (const uri of uris || []) {
+          try {
+            const stat = await vscode.workspace.fs.stat(uri);
+            files.push({ path: uri.fsPath, name: require("path").basename(uri.fsPath), size: stat.size });
+          } catch {
+            // 取不到大小不影响使用，路径才是关键
+            files.push({ path: uri.fsPath, name: require("path").basename(uri.fsPath), size: 0 });
+          }
+        }
+        this.postToWebview({
+          type: "cowork_files_picked",
+          clientId: typeof m.clientId === "string" ? (m.clientId as string) : undefined,
+          requestId: m.requestId as string,
+          files,
+        });
+        return;
+      }
+
+      if (m.type === "cowork_pick_output_dir" && typeof m.requestId === "string") {
+        let path: string | undefined;
+        let error: string | undefined;
+        try {
+          const initialPath = typeof m.initialPath === "string" && m.initialPath ? m.initialPath : undefined;
+          const uris = await vscode.window.showOpenDialog({
+            canSelectFiles: false,
+            canSelectFolders: true,
+            canSelectMany: false,
+            defaultUri: initialPath ? vscode.Uri.file(initialPath) : undefined,
+            openLabel: "设为产出位置",
+            title: "选择文档产出位置",
+          });
+          path = uris?.[0]?.fsPath;
+        } catch (err) {
+          error = (err as Error).message;
+        }
+        this.postToWebview({
+          type: "cowork_output_dir_picked",
+          clientId: typeof m.clientId === "string" ? m.clientId : undefined,
+          requestId: m.requestId,
+          path,
+          error,
+        });
+        return;
+      }
+
+      // Chat 产物目录选择。
+      //
+      // 与上面 cowork_pick_output_dir 刻意各写一份、消息名也不共用：Cowork 可能整体下线，
+      // 共用一个处理分支的话，删 Cowork 时会连带误伤 Chat 的产物功能。
+      if (m.type === "pick_artifact_dir" && typeof m.requestId === "string") {
+        let path: string | undefined;
+        let error: string | undefined;
+        try {
+          const initialPath = typeof m.initialPath === "string" && m.initialPath ? m.initialPath : undefined;
+          const uris = await vscode.window.showOpenDialog({
+            canSelectFiles: false,
+            canSelectFolders: true,
+            canSelectMany: false,
+            defaultUri: initialPath ? vscode.Uri.file(initialPath) : undefined,
+            openLabel: "设为产物目录",
+            title: "选择产物保存位置",
+          });
+          path = uris?.[0]?.fsPath;
+        } catch (err) {
+          error = (err as Error).message;
+        }
+        this.postToWebview({
+          type: "artifact_dir_picked",
+          clientId: typeof m.clientId === "string" ? m.clientId : undefined,
+          requestId: m.requestId,
+          path,
+          error,
+        });
+        return;
+      }
+
+      // Cowork：查看 AI 对某文件的改动（原稿 vs 现文件）。
+      //
+      // 原稿在内核快照目录里（cowork-snapshots/<sessionId>/<turn>/），路径编码规则
+      // 与 CoworkSnapshotter 一致（分隔符全部替换成 __）。两边各转一次文本
+      // （复用 preview-office.py），diff 由 workbench overlay 渲染。
+      if (m.type === "cowork_get_changes" && typeof m.requestId === "string"
+        && typeof m.path === "string" && typeof m.snapshotDir === "string") {
+        void this.showCoworkChanges(m.requestId, String(m.path), String(m.snapshotDir));
+        return;
+      }
+
+      // Cowork：恢复原稿（快照覆盖现文件）。恢复后自动打开预览，让用户立刻确认结果。
+      if (m.type === "cowork_restore_snapshot" && typeof m.requestId === "string"
+        && typeof m.path === "string" && typeof m.snapshotDir === "string") {
+        void this.restoreCoworkSnapshot(m.requestId, String(m.path), String(m.snapshotDir));
         return;
       }
 
@@ -194,6 +392,7 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+
       // 打开 Marketplace 源管理面板
       if (m.type === "open_marketplace_manager") {
         vscode.commands.executeCommand("axon.openMarketplaceManager");
@@ -211,7 +410,6 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
           query: `view=relay&id=${encodeURIComponent(relayId)}&workspace=${encodeURIComponent(workspace)}`,
           extensionUri: this.context.extensionUri,
           router: this.router,
-          postToSidebar: (msg: unknown) => this.postToWebview(msg),
           icon: "media/relay.svg",
         });
         return;
@@ -337,6 +535,8 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
     view.onDidDispose(() => {
       this.channel.setWebview(null);
       this.view = null;
+      this.watchdog?.dispose();
+      this.watchdog = null;
     });
 
     view.webview.html = await this.buildHtml(view.webview, webRoot);
@@ -355,6 +555,277 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
 
   postToWebview(message: unknown): void {
     void this.view?.webview.postMessage(message);
+  }
+
+  /**
+   * 读取文件并交给 workbench overlay 渲染。
+   *
+   * 先弹出 loading 再异步读：Office 要起 Python 子进程、PDF 要做 base64，
+   * 大文件这两步都可能是几百毫秒，先给界面反馈比干等更好。
+   */
+  private async showFilePreview(rawPath: string): Promise<void> {
+    const path = require("path");
+    const fs = require("fs/promises");
+    const filePath = path.resolve(rawPath);
+    const name = path.basename(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const badge = (ext.replace(/^\./, "") || "file").toUpperCase();
+
+    const render = async (payload: Record<string, unknown>) => {
+      await vscode.commands.executeCommand("axon.showFilePreviewModal", { name, path: filePath, badge, ...payload });
+    };
+
+    await render({ loading: true });
+
+    /** 二进制预览的体积上限：base64 会膨胀 1/3，再大就会把 IPC 和内存压爆 */
+    const MAX_BINARY_BYTES = 24 * 1024 * 1024;
+    /** 文本预览的体积上限：超出只取前面一段，避免 overlay 卡死在几十 MB 的日志上 */
+    const MAX_TEXT_BYTES = 2 * 1024 * 1024;
+
+    const imageMime: Record<string, string> = {
+      ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+      ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp", ".ico": "image/x-icon",
+    };
+    const videoMime: Record<string, string> = { ".mp4": "video/mp4", ".webm": "video/webm" };
+    /**
+     * 视频预览的体积上限。
+     *
+     * 视频要经命令通道整段送进 workbench，再拼进预览页的 HTML 里 —— base64 本身膨胀 1/3，
+     * 等于同一个文件在内存里存在三份（原始 Buffer、base64 串、拼接后的 HTML）。
+     * 上限放太宽会把这三份一起放大，容易把 IPC 和渲染进程拖死，所以收到 12MB：
+     * 典型的 720p 十几秒成片在 1~3MB，够用；更大的请用系统播放器。
+     */
+    const MAX_VIDEO_BYTES = 12 * 1024 * 1024;
+    const textExts = new Set([
+      ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".json5", ".yaml", ".yml", ".xml",
+      ".css", ".scss", ".less", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".svelte",
+      ".py", ".java", ".kt", ".kts", ".go", ".rs", ".rb", ".php", ".swift", ".scala", ".dart",
+      ".lua", ".r", ".c", ".h", ".cpp", ".cc", ".hpp", ".cs", ".m", ".mm",
+      ".sql", ".graphql", ".proto", ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd",
+      ".log", ".ini", ".toml", ".env", ".conf", ".cfg", ".properties", ".gradle", ".dockerfile", ".makefile",
+    ]);
+
+    try {
+      const stat = await fs.stat(filePath).catch(() => null);
+      if (!stat || !stat.isFile()) {
+        await render({ kind: "unsupported", message: "文件不存在或无法读取" });
+        return;
+      }
+
+      if ([".html", ".htm", ".svg"].includes(ext)) {
+        if (stat.size > MAX_TEXT_BYTES) {
+          await render({ kind: "unsupported", message: "文件过大，暂不支持预览" });
+          return;
+        }
+        await render({ kind: ext === ".svg" ? "svg" : "html", content: await fs.readFile(filePath, "utf8") });
+        return;
+      }
+
+      if (imageMime[ext] || ext === ".pdf") {
+        if (stat.size > MAX_BINARY_BYTES) {
+          await render({ kind: "unsupported", message: "文件过大，暂不支持预览" });
+          return;
+        }
+        const buf = await fs.readFile(filePath);
+        await render({ kind: ext === ".pdf" ? "pdf" : "image", mime: imageMime[ext], content: buf.toString("base64") });
+        return;
+      }
+
+      if ([".xls", ".doc", ".ppt"].includes(ext)) {
+        await render({ kind: "unsupported", message: "旧版 Office 格式暂不支持预览，请另存为 xlsx、docx 或 pptx" });
+        return;
+      }
+
+      if (videoMime[ext]) {
+        if (stat.size > MAX_VIDEO_BYTES) {
+          await render({ kind: "unsupported", message: "视频文件过大，暂不支持在此预览，请用系统播放器打开" });
+          return;
+        }
+        const buf = await fs.readFile(filePath);
+        await render({ kind: "video", mime: videoMime[ext], content: buf.toString("base64") });
+        return;
+      }
+
+      if ([".xlsx", ".docx", ".pptx"].includes(ext)) {
+        await render(await this.convertOfficeForPreview(filePath));
+        return;
+      }
+
+      if (textExts.has(ext) || !ext) {
+        const buf = await fs.readFile(filePath);
+        const truncated = buf.length > MAX_TEXT_BYTES;
+        const text = buf.subarray(0, MAX_TEXT_BYTES).toString("utf8");
+        await render({
+          kind: "text",
+          content: truncated ? `${text}\n\n…（文件过大，仅显示前 ${Math.round(MAX_TEXT_BYTES / 1024)} KB）` : text,
+        });
+        return;
+      }
+
+      await render({ kind: "unsupported", message: "该文件类型不支持预览" });
+    } catch (err) {
+      await render({ kind: "unsupported", message: `无法预览：${(err as Error).message}` });
+    }
+  }
+
+  /**
+   * Office 文档转结构化文本。
+   *
+   * 用 spawn 而不是 spawnSync：同步版会阻塞扩展主线程，几 MB 的工作簿能卡住整个
+   * 扩展宿主（连带侧栏无响应）。超时 20 秒兜底，防止 Python 卡住不退。
+   */
+  private convertOfficeForPreview(filePath: string): Promise<Record<string, unknown>> {
+    const path = require("path");
+    const cp = require("child_process");
+    const script = path.join(this.context.extensionPath, "scripts", "preview-office.py");
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (payload: Record<string, unknown>) => {
+        if (settled) return;
+        settled = true;
+        resolve(payload);
+      };
+
+      // python 不在 PATH 时退回 python3（macOS / 部分 Linux 发行版）
+      const tryRun = (bin: string, onFail: () => void) => {
+        // ⚠️ PYTHONIOENCODING 必须显式设成 utf-8。
+        //
+        // Windows 上 Python 默认用系统 ANSI 编码（中文环境是 GBK）写 stdout，
+        // 而这边按 UTF-8 解码 —— 中文表头会全变成替换字符（实测 "PC应用" → "PCӦ��"）。
+        // 英文和路径看不出问题，所以很容易漏掉。
+        const child = cp.spawn(bin, [script, filePath], {
+          windowsHide: true,
+          env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+        });
+        const timer = setTimeout(() => {
+          child.kill();
+          finish({ kind: "unsupported", message: "解析文档超时" });
+        }, 20_000);
+
+        // 先攒 Buffer 再整体解码：多字节字符可能跨 chunk 边界被切开，
+        // 逐块 toString 会把切断处解成替换字符。
+        const chunks: Buffer[] = [];
+        child.stdout?.on("data", (chunk: Buffer) => { chunks.push(chunk); });
+        child.on("error", () => { clearTimeout(timer); onFail(); });
+        child.on("close", (code: number) => {
+          clearTimeout(timer);
+          const stdout = Buffer.concat(chunks).toString("utf8").trim();
+          if (code === 0 && stdout) {
+            try {
+              finish(JSON.parse(stdout) as Record<string, unknown>);
+              return;
+            } catch { /* 落到下方的失败分支 */ }
+          }
+          finish({ kind: "unsupported", message: "当前环境缺少预览该文档所需的解析能力" });
+        });
+      };
+
+      tryRun("python", () => {
+        tryRun("python3", () => finish({ kind: "unsupported", message: "未检测到 Python，无法预览该文档" }));
+      });
+    });
+  }
+
+  /**
+   * Cowork：展示「AI 改了什么」——原稿与现文件各转一次文本，行级对比交给 overlay。
+   *
+   * 快照文件名 = 原路径把 \ 和 / 全部替换成 __（CoworkSnapshotter 的编码规则）。
+   * 文本类文件（csv/txt/md）不走 Python，直接读；Office 走 convertOfficeForPreview。
+   */
+  private async showCoworkChanges(requestId: string, filePath: string, snapshotDir: string): Promise<void> {
+    const path = require("path");
+    const fs = require("fs/promises");
+    const name = path.basename(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const badge = (ext.replace(/^\./, "") || "file").toUpperCase();
+    // 与 CoworkSnapshotter.snapshotFileName 相同的编码：所有平台保留字符替换成 __
+    const snapshotPath = path.join(snapshotDir, filePath.replace(/[\\/:*?"<>|]+/g, "__"));
+
+    const render = async (payload: Record<string, unknown>) => {
+      await vscode.commands.executeCommand("axon.showFilePreviewModal", {
+        name, path: filePath, badge, ...payload,
+      });
+    };
+
+    try {
+      const original = await fs.readFile(snapshotPath).catch(() => null);
+      if (!original) {
+        await render({ kind: "unsupported", message: "原稿快照不存在（可能已被清理），无法对比" });
+        return;
+      }
+      await render({ loading: true });
+
+      const toText = async (absPath: string): Promise<string | null> => {
+        const stat = await fs.stat(absPath).catch(() => null);
+        if (!stat || !stat.isFile()) return null;
+        if ([".xlsx", ".docx", ".pptx"].includes(path.extname(absPath).toLowerCase())) {
+          const converted = await this.convertOfficeForPreview(absPath);
+          return typeof converted.content === "string" ? converted.content : null;
+        }
+        const buf = await fs.readFile(absPath);
+        // 与预览一致的文本上限：对比场景 2MB 足够，超出截断并注明
+        const MAX = 2 * 1024 * 1024;
+        const text = buf.subarray(0, MAX).toString("utf8");
+        return buf.length > MAX ? `${text}\n…（过大，仅对比前 2MB）` : text;
+      };
+
+      const [beforeText, afterText] = await Promise.all([toText(snapshotPath), toText(filePath)]);
+      if (afterText === null) {
+        await render({ kind: "unsupported", message: "当前文件不存在或无法读取" });
+        return;
+      }
+      await render({
+        kind: "diff",
+        before: beforeText ?? "",
+        after: afterText,
+        snapshotDir,
+        restorable: true,
+      });
+    } catch (err) {
+      await render({ kind: "unsupported", message: `无法对比：${(err as Error).message}` });
+    }
+  }
+
+  /**
+   * Cowork：用原稿快照覆盖现文件。
+   *
+   * 恢复前再读一次快照确认存在（用户可能隔了几天才点恢复）；恢复后打开预览
+   * 让用户立刻看到结果，并回发事件让前端把标签状态刷新为「已恢复」。
+   */
+  /** overlay「恢复原稿」按钮的入口（extension.ts 注册的命令转发到这里） */
+  async restoreCoworkSnapshotFromOverlay(filePath: string, snapshotDir: string): Promise<void> {
+    await this.restoreCoworkSnapshot(`overlay-${Date.now()}`, filePath, snapshotDir);
+  }
+
+  private async restoreCoworkSnapshot(requestId: string, filePath: string, snapshotDir: string): Promise<void> {
+    const path = require("path");
+    const fs = require("fs/promises");
+    // 与 CoworkSnapshotter.snapshotFileName 相同的编码：所有平台保留字符替换成 __
+    const snapshotPath = path.join(snapshotDir, filePath.replace(/[\\/:*?"<>|]+/g, "__"));
+    let error: string | undefined;
+    try {
+      const bytes = await fs.readFile(snapshotPath).catch(() => null);
+      if (!bytes) {
+        error = "原稿快照不存在（可能已被清理）";
+      } else {
+        await fs.writeFile(filePath, bytes);
+      }
+    } catch (err) {
+      error = (err as Error).message;
+    }
+    this.postToWebview({
+      type: "cowork_snapshot_restored",
+      clientId: undefined,
+      requestId,
+      path: filePath,
+      error,
+    });
+    if (!error) {
+      await this.showFilePreview(filePath);
+    } else {
+      vscode.window.showWarningMessage(`恢复原稿失败：${error}`);
+    }
   }
 
   /** 从扩展命令把资源加入聊天输入框（用于资源管理器右键菜单）。 */
@@ -529,17 +1000,21 @@ export class AxonViewProvider implements vscode.WebviewViewProvider {
       .replace(/(src|href)="\.?\/assets\//g, `$1="${baseUri}/assets/`)
       .replace(/(src|href)="\.\/(?!assets)/g, `$1="${baseUri}/`);
 
-    // 注入 CSP（允许 webview 资源 + inline 样式；脚本仅限 webview 源）
+    // 注入 CSP（允许 webview 资源 + inline 样式；脚本仅限 webview 源）。
+    // nonce 只发给聊天里的 HTML 预览：预览 iframe 继承这份 CSP，带上同一个 nonce 的脚本才能运行，
+    // 让 AI 写的交互页面（按钮、表单、图表库）真正可用；iframe 不开同源权限，脚本碰不到主页面。
+    // 'unsafe-eval' 用于把预览里的 onclick="..." 这类内联事件转成监听器（CSP 下内联事件无法用 nonce 放行）。
+    const nonce = createCspNonce();
     const csp = [
       `default-src 'none'`,
       `img-src ${webview.cspSource} https: data:`,
       `style-src ${webview.cspSource} 'unsafe-inline'`,
-      `script-src ${webview.cspSource}`,
+      `script-src ${webview.cspSource} 'nonce-${nonce}' 'unsafe-eval'`,
       `font-src ${webview.cspSource} data:`,
       `connect-src ${webview.cspSource}`,
     ].join("; ");
     if (!/Content-Security-Policy/.test(html)) {
-      html = html.replace(/<head>/i, `<head>\n<meta http-equiv="Content-Security-Policy" content="${csp}" />`);
+      html = html.replace(/<head>/i, `<head>\n<meta http-equiv="Content-Security-Policy" content="${csp}" />\n<meta name="axon-csp-nonce" content="${nonce}" />`);
     }
     return html;
   }
@@ -578,4 +1053,9 @@ body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);displa
 </div>
 </body></html>`;
   }
+}
+
+/** CSP nonce：每次生成页面换一个 */
+function createCspNonce(): string {
+  return require("crypto").randomBytes(18).toString("base64");
 }

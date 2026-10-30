@@ -32,7 +32,6 @@ import product from '../../product/common/product.js';
 import { IProductService } from '../../product/common/productService.js';
 import { InstantiationService } from '../../instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../instantiation/common/serviceCollection.js';
-import { CopilotAgent } from './copilot/copilotAgent.js';
 import { CopilotApiService, ICopilotApiService } from './shared/copilotApiService.js';
 import { ClaudeAgent } from './claude/claudeAgent.js';
 import { ClaudeAgentSdkService, IClaudeAgentSdkService } from './claude/claudeAgentSdkService.js';
@@ -242,9 +241,7 @@ async function main(): Promise<void> {
 		diServices.set(IClaudeAgentSdkService, claudeAgentSdkService);
 		const agentHostOTelService = disposables.add(instantiationService.createInstance(AgentHostOTelService));
 		diServices.set(IAgentHostOTelService, agentHostOTelService);
-		const copilotAgent = disposables.add(instantiationService.createInstance(CopilotAgent));
-		agentService.registerProvider(copilotAgent);
-		log('CopilotAgent registered');
+		// Axon: CopilotAgent is intentionally not registered (@github/copilot-sdk was removed), see agentHostMain.ts.
 		if (options.claudeSdkPath) {
 			// `ClaudeAgentSdkService` reads `AgentHostClaudeSdkPathEnvVar` directly,
 			// so make sure it is set even if the path was provided via CLI flag.
