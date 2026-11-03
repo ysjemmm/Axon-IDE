@@ -141,7 +141,7 @@ jobs:
       # （合计十几分钟）整段跳过。key 里带 lock 文件与安装脚本，任何一个变了都会重新装。
       - name: Restore dependency cache
         id: deps-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             node_modules
@@ -293,7 +293,7 @@ jobs:
       # 依赖装完、构建还没动 node_modules 之前存缓存（只在没命中时存）
       - name: Save dependency cache
         if: steps.deps-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             node_modules
